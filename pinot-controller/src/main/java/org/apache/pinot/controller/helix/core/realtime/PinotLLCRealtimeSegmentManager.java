@@ -63,8 +63,10 @@ import org.apache.pinot.controller.helix.core.realtime.segment.CommittingSegment
 import org.apache.pinot.controller.helix.core.realtime.segment.FlushThresholdUpdateManager;
 import org.apache.pinot.controller.helix.core.realtime.segment.FlushThresholdUpdater;
 import org.apache.pinot.controller.util.SegmentCompletionUtils;
-import org.apache.pinot.segment.spi.index.metadata.ColumnMetadata;
+import org.apache.pinot.segment.spi.ColumnMetadata;
+import org.apache.pinot.segment.spi.creator.SegmentVersion;
 import org.apache.pinot.segment.spi.index.metadata.SegmentMetadataImpl;
+import org.apache.pinot.segment.spi.partition.PartitionFunction;
 import org.apache.pinot.segment.spi.partition.metadata.ColumnPartitionMetadata;
 import org.apache.pinot.spi.config.table.ColumnPartitionConfig;
 import org.apache.pinot.spi.config.table.SegmentPartitionConfig;
@@ -590,7 +592,10 @@ public class PinotLLCRealtimeSegmentManager {
       committingSegmentZKMetadata.setEndTime(now);
     }
     committingSegmentZKMetadata.setTimeUnit(TimeUnit.MILLISECONDS);
-    committingSegmentZKMetadata.setIndexVersion(segmentMetadata.getVersion());
+    SegmentVersion segmentVersion = segmentMetadata.getVersion();
+    if (segmentVersion != null) {
+      committingSegmentZKMetadata.setIndexVersion(segmentVersion.name());
+    }
     committingSegmentZKMetadata.setTotalDocs(segmentMetadata.getTotalDocs());
 
     // Update the partition group metadata based on the segment metadata
@@ -675,10 +680,11 @@ public class PinotLLCRealtimeSegmentManager {
     for (Map.Entry<String, ColumnMetadata> entry : segmentMetadata.getColumnMetadataMap().entrySet()) {
       // NOTE: There is at most one partition column.
       ColumnMetadata columnMetadata = entry.getValue();
-      if (columnMetadata.getPartitionFunction() != null) {
+      PartitionFunction partitionFunction = columnMetadata.getPartitionFunction();
+      if (partitionFunction != null) {
         ColumnPartitionMetadata columnPartitionMetadata =
-            new ColumnPartitionMetadata(columnMetadata.getPartitionFunction().toString(),
-                columnMetadata.getNumPartitions(), columnMetadata.getPartitions());
+            new ColumnPartitionMetadata(partitionFunction.toString(), partitionFunction.getNumPartitions(),
+                columnMetadata.getPartitions());
         return new SegmentPartitionMetadata(Collections.singletonMap(entry.getKey(), columnPartitionMetadata));
       }
     }
