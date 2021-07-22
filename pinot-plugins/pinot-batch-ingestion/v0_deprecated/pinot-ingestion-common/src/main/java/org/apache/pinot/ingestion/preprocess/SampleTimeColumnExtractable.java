@@ -16,26 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pinot.hadoop.utils.preprocess;
+package org.apache.pinot.ingestion.preprocess;
 
-import org.apache.hadoop.io.Text;
-import org.apache.hadoop.io.WritableComparator;
-import org.apache.hadoop.io.WritableUtils;
-import org.apache.pinot.spi.utils.StringUtils;
+import java.io.IOException;
 
 
-/**
- * Override the Text comparison logic to compare with the decoded String instead of the byte array.
- */
-public class TextComparator extends WritableComparator {
-  public TextComparator() {
-    super(Text.class);
-  }
+public interface SampleTimeColumnExtractable {
 
-  @Override
-  public int compare(byte[] b1, int s1, int l1, byte[] b2, int s2, int l2) {
-    int n1 = WritableUtils.decodeVIntSize(b1[s1]);
-    int n2 = WritableUtils.decodeVIntSize(b2[s2]);
-    return StringUtils.decodeUtf8(b1, s1 + n1, l1 - n1).compareTo(StringUtils.decodeUtf8(b2, s2 + n2, l2 - n2));
-  }
+  String getSampleTimeColumnValue(String timeColumnName) throws IOException;
 }
