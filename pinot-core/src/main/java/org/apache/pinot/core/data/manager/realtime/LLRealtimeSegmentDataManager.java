@@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.annotation.Nullable;
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.pinot.common.Utils;
 import org.apache.pinot.common.metadata.segment.LLCRealtimeSegmentZKMetadata;
 import org.apache.pinot.common.metadata.segment.RealtimeSegmentZKMetadata;
@@ -442,6 +443,33 @@ public class LLRealtimeSegmentDataManager extends RealtimeSegmentDataManager {
     return true;
   }
 
+  private boolean isValid(byte[] data) {
+    String topic = _partitionLevelStreamConfig.getTopicName();
+    String value = new String(data);
+    if (value != null && topic != null){
+      if ("webex_aggregated_meeting_hdfs".equalsIgnoreCase(topic)){
+        if (!StringUtils.containsIgnoreCase(value, "SessUserLeave")){
+          return false;
+        }
+      }
+      if ("webex_aggregated_tahoe_hdfs".equalsIgnoreCase(topic)){
+        if (!StringUtils.containsIgnoreCase(value, "Tel_Callout_End")){
+          return false;
+        }
+      }
+      if (StringUtils.containsIgnoreCase(topic, "logstash_telephony") ||
+              StringUtils.containsIgnoreCase(topic, "logstash_cmse_servicediagnostic")){
+        if (!(StringUtils.containsIgnoreCase(value, "FailOnJoinSession") ||
+                StringUtils.containsIgnoreCase(value, "SipAudioRecvInfo") ||
+                StringUtils.containsIgnoreCase(value, "SipVideoRecvInfo") ||
+                StringUtils.containsIgnoreCase(value, "ServerQos"))){
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   private void processStreamEvents(MessageBatch messagesAndOffsets, long idlePipeSleepTimeMillis) {
     PinotMeter realtimeRowsConsumedMeter = null;
     PinotMeter realtimeRowsDroppedMeter = null;
@@ -482,9 +510,12 @@ public class LLRealtimeSegmentDataManager extends RealtimeSegmentDataManager {
       // this can be overridden by the decoder if there is a better indicator in the message payload
       RowMetadata msgMetadata = messagesAndOffsets.getMetadataAtIndex(index);
 
-      GenericRow decodedRow = _messageDecoder
-          .decode(messagesAndOffsets.getMessageAtIndex(index), messagesAndOffsets.getMessageOffsetAtIndex(index),
-              messagesAndOffsets.getMessageLengthAtIndex(index), reuse);
+      GenericRow decodedRow = null;
+      if (isValid((byte[])messagesAndOffsets.getMessageAtIndex(index))) {
+        decodedRow = _messageDecoder
+                .decode(messagesAndOffsets.getMessageAtIndex(index), messagesAndOffsets.getMessageOffsetAtIndex(index),
+                        messagesAndOffsets.getMessageLengthAtIndex(index), reuse);
+      }
       if (decodedRow != null) {
         try {
           if (_complexTypeTransformer != null) {
