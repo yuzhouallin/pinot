@@ -4,7 +4,6 @@ import org.apache.pinot.common.function.scalar.utils.MapPathUtils;
 import org.apache.pinot.spi.annotations.ScalarFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import javax.validation.constraints.NotNull;
 import java.util.ArrayList;
 import java.util.Map;

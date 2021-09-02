@@ -6,7 +6,6 @@ import com.maxmind.geoip2.model.CityResponse;
 import org.apache.pinot.spi.annotations.ScalarFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import java.io.InputStream;
 import java.net.InetAddress;
 
