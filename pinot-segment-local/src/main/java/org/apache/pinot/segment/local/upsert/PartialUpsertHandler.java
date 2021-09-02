@@ -20,6 +20,8 @@ package org.apache.pinot.segment.local.upsert;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
+
 import org.apache.helix.HelixDataAccessor;
 import org.apache.helix.HelixManager;
 import org.apache.helix.PropertyKey;
@@ -137,6 +139,34 @@ public class PartialUpsertHandler {
         }
       }
     }
+
+    // there is a case: need reserve previous column value but abort the new value, like metrics create time column
+    // currently, there is not have a strategy for this, so we need a temp solution
+    reverseNoneUpsertFields(previousRecord, newRecord);
     return newRecord;
+  }
+
+  /**
+   * reserve previous column value while column without configure upsert strategy
+   * @param previousRecord
+   * @param newRecord
+   */
+  private void reverseNoneUpsertFields(GenericRow previousRecord, GenericRow newRecord) {
+    Set<String> column2Mergers = _column2Mergers.keySet();
+    Set<String> recordColumns = newRecord.getFieldToValueMap().keySet();
+
+    recordColumns.forEach(recordColumn -> {
+      if (!column2Mergers.contains(recordColumn)) {
+        boolean isPreviousRecordNull = previousRecord.getNullValueFields().contains(recordColumn);
+        // use none valued previous column
+        if (!isPreviousRecordNull) {
+          Object previousValue = previousRecord.getValue(recordColumn);
+          newRecord.putValue(recordColumn, previousValue);
+          if (newRecord.isNullValue(recordColumn)) {
+            newRecord.removeNullValueField(recordColumn);
+          }
+        }
+      }
+    });
   }
 }
