@@ -1,8 +1,8 @@
 package org.apache.pinot.common.function.scalar;
 
-import javax.validation.constraints.NotNull;
 import java.util.ArrayList;
 import java.util.Map;
+import javax.validation.constraints.NotNull;
 import org.apache.pinot.common.function.scalar.utils.MapPathUtils;
 import org.apache.pinot.spi.annotations.ScalarFunction;
 import org.slf4j.Logger;
