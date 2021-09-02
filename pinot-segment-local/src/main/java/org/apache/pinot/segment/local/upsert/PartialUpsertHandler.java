@@ -21,7 +21,6 @@ package org.apache.pinot.segment.local.upsert;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
-
 import org.apache.helix.HelixDataAccessor;
 import org.apache.helix.HelixManager;
 import org.apache.helix.PropertyKey;

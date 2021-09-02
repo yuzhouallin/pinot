@@ -36,7 +36,6 @@ import javax.ws.rs.container.ContainerRequestFilter;
 import javax.ws.rs.container.PreMatching;
 import javax.ws.rs.container.ResourceInfo;
 import javax.ws.rs.core.*;
-
 import org.apache.pinot.controller.api.exception.ControllerApplicationException;
 import org.glassfish.grizzly.http.server.Request;
 import org.slf4j.Logger;
