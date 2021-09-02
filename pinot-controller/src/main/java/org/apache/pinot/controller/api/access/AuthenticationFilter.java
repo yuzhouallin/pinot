@@ -76,14 +76,15 @@ public class AuthenticationFilter implements ContainerRequestFilter {
     String endpointUrl = _requestProvider.get().getRequestURL().toString();
     UriInfo uriInfo = requestContext.getUriInfo();
 
-    if (endpointMethod == null){
-      throw new ControllerApplicationException(LOGGER, "Permission is denied",
-              Response.Status.FORBIDDEN);
-    }
 
     // exclude public/unprotected paths
     if (isBaseFile(uriInfo.getPath()) || UNPROTECTED_PATHS.contains(uriInfo.getPath())) {
       return;
+    }
+
+    if (endpointMethod == null){
+      throw new ControllerApplicationException(LOGGER, "Permission is denied",
+              Response.Status.FORBIDDEN);
     }
 
     // check if authentication is required implicitly
