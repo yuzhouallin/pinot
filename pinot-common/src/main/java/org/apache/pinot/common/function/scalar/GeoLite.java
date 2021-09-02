@@ -3,11 +3,11 @@ package org.apache.pinot.common.function.scalar;
 import com.maxmind.geoip2.DatabaseReader;
 import com.maxmind.geoip2.model.AsnResponse;
 import com.maxmind.geoip2.model.CityResponse;
+import java.io.InputStream;
+import java.net.InetAddress;
 import org.apache.pinot.spi.annotations.ScalarFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.io.InputStream;
-import java.net.InetAddress;
 
 
 public class GeoLite {
