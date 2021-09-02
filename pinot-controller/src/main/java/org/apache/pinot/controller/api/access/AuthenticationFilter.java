@@ -33,12 +33,14 @@ import javax.ws.rs.POST;
 import javax.ws.rs.PUT;
 import javax.ws.rs.container.ContainerRequestContext;
 import javax.ws.rs.container.ContainerRequestFilter;
+import javax.ws.rs.container.PreMatching;
 import javax.ws.rs.container.ResourceInfo;
-import javax.ws.rs.core.Context;
-import javax.ws.rs.core.HttpHeaders;
-import javax.ws.rs.core.MultivaluedMap;
-import javax.ws.rs.core.UriInfo;
+import javax.ws.rs.core.*;
+
+import org.apache.pinot.controller.api.exception.ControllerApplicationException;
 import org.glassfish.grizzly.http.server.Request;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 /**
@@ -46,7 +48,11 @@ import org.glassfish.grizzly.http.server.Request;
  * with {@link Authenticate} annotation, will go through authentication.
  */
 @javax.ws.rs.ext.Provider
+@PreMatching
 public class AuthenticationFilter implements ContainerRequestFilter {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(ContainerRequestContext.class);
+
   private static final Set<String> UNPROTECTED_PATHS =
       new HashSet<>(Arrays.asList("", "help", "auth/info", "auth/verify"));
 
@@ -65,10 +71,16 @@ public class AuthenticationFilter implements ContainerRequestFilter {
   @Override
   public void filter(ContainerRequestContext requestContext)
       throws IOException {
+
     Method endpointMethod = _resourceInfo.getResourceMethod();
     AccessControl accessControl = _accessControlFactory.create();
     String endpointUrl = _requestProvider.get().getRequestURL().toString();
     UriInfo uriInfo = requestContext.getUriInfo();
+
+    if (endpointMethod == null){
+      throw new ControllerApplicationException(LOGGER, "Permission is denied",
+              Response.Status.FORBIDDEN);
+    }
 
     // exclude public/unprotected paths
     if (isBaseFile(uriInfo.getPath()) || UNPROTECTED_PATHS.contains(uriInfo.getPath())) {

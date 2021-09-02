@@ -86,7 +86,7 @@ public class AccessControlUtils {
     } catch (Exception e) {
       throw new ControllerApplicationException(LOGGER,
           "Caught exception while validating permission for " + accessTypeToEndpointMsg,
-          Response.Status.INTERNAL_SERVER_ERROR, e);
+          Response.Status.FORBIDDEN, e);
     }
     if (!hasPermission) {
       throw new ControllerApplicationException(LOGGER, "Permission is denied for " + accessTypeToEndpointMsg,
