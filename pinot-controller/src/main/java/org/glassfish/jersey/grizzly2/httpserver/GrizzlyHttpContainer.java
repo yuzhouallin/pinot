@@ -33,7 +33,6 @@ import javax.inject.Provider;
 import javax.ws.rs.core.Application;
 import javax.ws.rs.core.GenericType;
 import javax.ws.rs.core.SecurityContext;
-
 import org.apache.commons.lang3.StringEscapeUtils;
 import org.glassfish.grizzly.CompletionHandler;
 import org.glassfish.grizzly.http.server.HttpHandler;
