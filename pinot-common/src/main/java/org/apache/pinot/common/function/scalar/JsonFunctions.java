@@ -23,6 +23,8 @@ import com.google.common.annotations.VisibleForTesting;
 import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.Option;
+import com.jayway.jsonpath.spi.cache.CacheProvider;
+import com.jayway.jsonpath.spi.cache.NOOPCache;
 import com.jayway.jsonpath.spi.json.JacksonJsonProvider;
 import com.jayway.jsonpath.spi.json.JsonProvider;
 import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
@@ -49,6 +51,7 @@ import org.apache.pinot.spi.utils.JsonUtils;
  */
 public class JsonFunctions {
   static {
+    CacheProvider.setCache(new NOOPCache());
     Configuration.setDefaults(new Configuration.Defaults() {
       private final JsonProvider jsonProvider = new ArrayAwareJacksonJsonProvider();
       private final MappingProvider mappingProvider = new JacksonMappingProvider();
