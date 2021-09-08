@@ -24,7 +24,6 @@ import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.Option;
 import com.jayway.jsonpath.spi.cache.CacheProvider;
-import com.jayway.jsonpath.spi.cache.NOOPCache;
 import com.jayway.jsonpath.spi.json.JacksonJsonProvider;
 import com.jayway.jsonpath.spi.json.JsonProvider;
 import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
@@ -34,6 +33,8 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import org.apache.pinot.common.function.SimpleJsonPathMapCache;
 import org.apache.pinot.spi.annotations.ScalarFunction;
 import org.apache.pinot.spi.utils.JsonUtils;
 
@@ -50,8 +51,11 @@ import org.apache.pinot.spi.utils.JsonUtils;
  *   </code>
  */
 public class JsonFunctions {
+  private static final int DEFAULT_JSON_PATH_CACHE_SIZE_MAX = 1024 * 16;
+
   static {
-    CacheProvider.setCache(new NOOPCache());
+    CacheProvider.setCache(new SimpleJsonPathMapCache(DEFAULT_JSON_PATH_CACHE_SIZE_MAX));
+
     Configuration.setDefaults(new Configuration.Defaults() {
       private final JsonProvider jsonProvider = new ArrayAwareJacksonJsonProvider();
       private final MappingProvider mappingProvider = new JacksonMappingProvider();
