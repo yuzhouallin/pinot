@@ -24,6 +24,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.collect.ImmutableList;
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -37,13 +38,21 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.apache.commons.io.FileUtils;
 import org.apache.helix.model.IdealState;
+import org.apache.http.Header;
+import org.apache.http.HttpStatus;
+import org.apache.http.NameValuePair;
+import org.apache.http.message.BasicHeader;
+import org.apache.http.message.BasicNameValuePair;
+import org.apache.pinot.common.exception.HttpErrorStatusException;
 import org.apache.pinot.common.exception.QueryException;
 import org.apache.pinot.common.metadata.segment.SegmentZKMetadata;
 import org.apache.pinot.common.proto.Server;
 import org.apache.pinot.common.request.BrokerRequest;
 import org.apache.pinot.common.utils.DataTable;
 import org.apache.pinot.common.utils.DataTable.MetadataKey;
+import org.apache.pinot.common.utils.FileUploadDownloadClient;
 import org.apache.pinot.common.utils.ServiceStatus;
+import org.apache.pinot.common.utils.SimpleHttpResponse;
 import org.apache.pinot.common.utils.grpc.GrpcQueryClient;
 import org.apache.pinot.common.utils.grpc.GrpcRequestBuilder;
 import org.apache.pinot.core.common.datatable.DataTableFactory;
@@ -78,6 +87,7 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
   private static final int NUM_SERVERS = 1;
   private static final int NUM_SEGMENTS = 12;
   private static final long ONE_HOUR_IN_MS = TimeUnit.HOURS.toMillis(1);
+  private static final String SEGMENT_UPLOAD_TEST_TABLE = "segmentUploadTestTable";
 
   // For table config refresh test, make an expensive query to ensure the query won't finish in 5ms
   private static final String TEST_TIMEOUT_QUERY =
@@ -122,15 +132,18 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
   private static final String NUM_ROWS_KEY = "numRows";
   private static final String COLUMN_LENGTH_MAP_KEY = "columnLengthMap";
   private static final String COLUMN_CARDINALITY_MAP_KEY = "columnCardinalityMap";
-  // V1 format takes 20270480 bytes. Below is what V3 format takes.
   // TODO: This might lead to flaky test, as this disk size is not deterministic
-  // as it depends on the iteration order of a HashSet.
-  private static final int DISK_SIZE_IN_BYTES = 20444064;
+  //       as it depends on the iteration order of a HashSet.
+  private static final int DISK_SIZE_IN_BYTES = 20442320;
   private static final int NUM_ROWS = 115545;
 
   private final List<ServiceStatus.ServiceStatusCallback> _serviceStatusCallbacks =
       new ArrayList<>(getNumBrokers() + getNumServers());
   private String _schemaFileName = DEFAULT_SCHEMA_FILE_NAME;
+  // Cache the table size after removing an index via reloading. Once this value
+  // is set, assert that table size always gets back to this value after removing
+  // any other kind of index.
+  private long _tableSizeAfterRemovingIndex;
 
   protected int getNumBrokers() {
     return NUM_BROKERS;
@@ -254,16 +267,22 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
       try {
         JsonNode queryResponse = postQuery(TEST_TIMEOUT_QUERY);
         JsonNode exceptions = queryResponse.get("exceptions");
-        if (exceptions.size() != 0) {
+        if (exceptions.isEmpty()) {
+          return false;
+        }
+        int errorCode = exceptions.get(0).get("errorCode").asInt();
+        if (errorCode == QueryException.BROKER_TIMEOUT_ERROR_CODE) {
           // Timed out on broker side
-          return exceptions.get(0).get("errorCode").asInt() == QueryException.BROKER_TIMEOUT_ERROR_CODE;
-        } else {
+          return true;
+        }
+        if (errorCode == QueryException.SERVER_NOT_RESPONDING_ERROR_CODE) {
           // Timed out on server side
           int numServersQueried = queryResponse.get("numServersQueried").asInt();
           int numServersResponded = queryResponse.get("numServersResponded").asInt();
           int numDocsScanned = queryResponse.get("numDocsScanned").asInt();
           return numServersQueried == getNumServers() && numServersResponded == 0 && numDocsScanned == 0;
         }
+        return false;
       } catch (Exception e) {
         throw new RuntimeException(e);
       }
@@ -278,7 +297,7 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
       try {
         JsonNode queryResponse = postQuery(TEST_TIMEOUT_QUERY);
         JsonNode exceptions = queryResponse.get("exceptions");
-        if (exceptions.size() != 0) {
+        if (!exceptions.isEmpty()) {
           return false;
         }
         int numServersQueried = queryResponse.get("numServersQueried").asInt();
@@ -322,27 +341,82 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
   }
 
   @Test
+  public void testUploadSegmentRefreshOnly()
+      throws Exception {
+    TableConfig segmentUploadTestTableConfig =
+        new TableConfigBuilder(TableType.OFFLINE).setTableName(SEGMENT_UPLOAD_TEST_TABLE).setSchemaName(getSchemaName())
+            .setTimeColumnName(getTimeColumnName()).setSortedColumn(getSortedColumn())
+            .setInvertedIndexColumns(getInvertedIndexColumns()).setNoDictionaryColumns(getNoDictionaryColumns())
+            .setRangeIndexColumns(getRangeIndexColumns()).setBloomFilterColumns(getBloomFilterColumns())
+            .setFieldConfigList(getFieldConfigs()).setNumReplicas(getNumReplicas())
+            .setSegmentVersion(getSegmentVersion())
+            .setLoadMode(getLoadMode()).setTaskConfig(getTaskConfig()).setBrokerTenant(getBrokerTenant())
+            .setServerTenant(getServerTenant()).setIngestionConfig(getIngestionConfig())
+            .setNullHandlingEnabled(getNullHandlingEnabled()).build();
+    addTableConfig(segmentUploadTestTableConfig);
+    String offlineTableName = segmentUploadTestTableConfig.getTableName();
+    File[] segmentTarFiles = _tarDir.listFiles();
+    assertNotNull(segmentTarFiles);
+    int numSegments = segmentTarFiles.length;
+    assertTrue(numSegments > 0);
+    List<Header> headers = new ArrayList<>();
+    headers.add(new BasicHeader(FileUploadDownloadClient.CustomHeaders.REFRESH_ONLY, "true"));
+    List<NameValuePair> parameters = new ArrayList<>();
+    NameValuePair tableNameParameter = new BasicNameValuePair(FileUploadDownloadClient.QueryParameters.TABLE_NAME,
+        TableNameBuilder.extractRawTableName(offlineTableName));
+    parameters.add(tableNameParameter);
+
+    URI uploadSegmentHttpURI = FileUploadDownloadClient.getUploadSegmentHttpURI(LOCAL_HOST, _controllerPort);
+    try (FileUploadDownloadClient fileUploadDownloadClient = new FileUploadDownloadClient()) {
+      // Refresh non-existing segment
+      File segmentTarFile = segmentTarFiles[0];
+      try {
+        fileUploadDownloadClient
+            .uploadSegment(uploadSegmentHttpURI, segmentTarFile.getName(), segmentTarFile, headers, parameters,
+                FileUploadDownloadClient.DEFAULT_SOCKET_TIMEOUT_MS);
+        fail();
+      } catch (HttpErrorStatusException e) {
+        assertEquals(e.getStatusCode(), HttpStatus.SC_GONE);
+        assertTrue(_helixResourceManager.getSegmentsZKMetadata(SEGMENT_UPLOAD_TEST_TABLE).isEmpty());
+      }
+
+      // Upload segment
+      SimpleHttpResponse response = fileUploadDownloadClient
+          .uploadSegment(uploadSegmentHttpURI, segmentTarFile.getName(), segmentTarFile, null, parameters,
+              FileUploadDownloadClient.DEFAULT_SOCKET_TIMEOUT_MS);
+      assertEquals(response.getStatusCode(), HttpStatus.SC_OK);
+      List<SegmentZKMetadata> segmentsZKMetadata = _helixResourceManager.getSegmentsZKMetadata(offlineTableName);
+      assertEquals(segmentsZKMetadata.size(), 1);
+
+      // Refresh existing segment
+      response = fileUploadDownloadClient
+          .uploadSegment(uploadSegmentHttpURI, segmentTarFile.getName(), segmentTarFile, headers, parameters,
+              FileUploadDownloadClient.DEFAULT_SOCKET_TIMEOUT_MS);
+      assertEquals(response.getStatusCode(), HttpStatus.SC_OK);
+      segmentsZKMetadata = _helixResourceManager.getSegmentsZKMetadata(offlineTableName);
+      assertEquals(segmentsZKMetadata.size(), 1);
+      assertNotEquals(segmentsZKMetadata.get(0).getRefreshTime(), Long.MIN_VALUE);
+    }
+    dropOfflineTable(SEGMENT_UPLOAD_TEST_TABLE);
+  }
+
+  @Test(dependsOnMethods = "testRangeIndexTriggering")
   public void testInvertedIndexTriggering()
       throws Exception {
-    String offlineTableName = TableNameBuilder.OFFLINE.tableNameWithType(getTableName());
     long numTotalDocs = getCountStarResult();
-    long tableSizeWithDefaultIndex = getTableSize(offlineTableName);
 
     // Without index on DivActualElapsedTime, all docs are scanned at filtering stage.
     assertEquals(postQuery(TEST_UPDATED_INVERTED_INDEX_QUERY).get("numEntriesScannedInFilter").asLong(), numTotalDocs);
 
-    // Add inverted index, and the table size gets larger.
     addInvertedIndex();
-    long tableSizeWithNewIndex = getTableSize(offlineTableName);
-    assertTrue(tableSizeWithNewIndex > tableSizeWithDefaultIndex);
+    long tableSizeWithNewIndex = getTableSize(getTableName());
 
-    // TODO: test index removal like this for other index types.
     // Update table config to remove the new inverted index, and
     // reload table to clean the new inverted indices physically.
     TableConfig tableConfig = getOfflineTableConfig();
     tableConfig.getIndexingConfig().setInvertedIndexColumns(getInvertedIndexColumns());
     updateTableConfig(tableConfig);
-    reloadOfflineTable(offlineTableName);
+    reloadOfflineTable(getTableName());
     TestUtils.waitForCondition(aVoid -> {
       try {
         JsonNode queryResponse = postQuery(TEST_UPDATED_INVERTED_INDEX_QUERY);
@@ -354,18 +428,12 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
         throw new RuntimeException(e);
       }
     }, 600_000L, "Failed to cleanup obsolete index");
-    // The table size after removing the index might not get back the original one,
-    // i.e. tableSizeWithDefaultIndex. Because entries in index_map file are reordered,
-    // and the file might get a different size. tableSizeAfterRemovingIndex should be
-    // close to tableSizeWithDefaultIndex, but their relationship is not deterministic.
-    long tableSizeAfterRemovingIndex = getTableSize(offlineTableName);
-    assertTrue(tableSizeAfterRemovingIndex < tableSizeWithNewIndex);
+    assertEquals(getTableSize(getTableName()), _tableSizeAfterRemovingIndex);
 
     // Add the inverted index back to test index removal via force download.
     addInvertedIndex();
-    long tableSizeAfterAddingIndexAgain = getTableSize(offlineTableName);
-    assertTrue(tableSizeAfterAddingIndexAgain > tableSizeWithDefaultIndex);
-    assertTrue(tableSizeAfterAddingIndexAgain > tableSizeAfterRemovingIndex);
+    long tableSizeAfterAddingIndexAgain = getTableSize(getTableName());
+    assertEquals(tableSizeAfterAddingIndexAgain, tableSizeWithNewIndex);
 
     // Update table config to remove the new inverted index.
     tableConfig = getOfflineTableConfig();
@@ -373,22 +441,23 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     updateTableConfig(tableConfig);
 
     // Force to download a single segment, and disk usage should drop a bit.
-    SegmentZKMetadata segmentZKMetadata = _helixResourceManager.getSegmentsZKMetadata(offlineTableName).get(0);
+    SegmentZKMetadata segmentZKMetadata =
+        _helixResourceManager.getSegmentsZKMetadata(TableNameBuilder.OFFLINE.tableNameWithType(getTableName())).get(0);
     String segmentName = segmentZKMetadata.getSegmentName();
-    reloadOfflineSegment(offlineTableName, segmentName, true);
+    reloadOfflineSegment(getTableName(), segmentName, true);
     TestUtils.waitForCondition(aVoid -> {
       try {
         JsonNode queryResponse = postQuery(TEST_UPDATED_INVERTED_INDEX_QUERY);
         // Total docs should not change during reload
         assertEquals(queryResponse.get("totalDocs").asLong(), numTotalDocs);
-        return getTableSize(offlineTableName) < tableSizeAfterAddingIndexAgain;
+        return getTableSize(getTableName()) < tableSizeAfterAddingIndexAgain;
       } catch (Exception e) {
         throw new RuntimeException(e);
       }
     }, 600_000L, "Failed to clean up obsolete index in segment");
 
     // Force to download the whole table and expect disk usage drops further.
-    reloadOfflineTable(offlineTableName, true);
+    reloadOfflineTable(getTableName(), true);
     TestUtils.waitForCondition(aVoid -> {
       try {
         JsonNode queryResponse = postQuery(TEST_UPDATED_INVERTED_INDEX_QUERY);
@@ -400,10 +469,8 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
         throw new RuntimeException(e);
       }
     }, 600_000L, "Failed to cleanup obsolete index in table");
-    // Because other test cases can add new indices to the table, like testBloomFilterTriggering,
-    // so the size of table after forced download can actually get smaller than the size obtained
-    // at the beginning of this test.
-    assertTrue(getTableSize(offlineTableName) <= tableSizeWithDefaultIndex);
+    // With force download, the table size gets back to the initial value.
+    assertEquals(getTableSize(getTableName()), DISK_SIZE_IN_BYTES);
   }
 
   private void addInvertedIndex()
@@ -500,56 +567,89 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     assertEquals(oneHourAgoValue, Long.parseLong(oneHourAgoColumnName));
   }
 
-  @Test
+  @Test(dependsOnMethods = "testBloomFilterTriggering")
   public void testRangeIndexTriggering()
       throws Exception {
     long numTotalDocs = getCountStarResult();
-
-    JsonNode queryResponse = postQuery(TEST_UPDATED_RANGE_INDEX_QUERY);
-    assertEquals(queryResponse.get("numEntriesScannedInFilter").asLong(), numTotalDocs);
+    assertEquals(postQuery(TEST_UPDATED_RANGE_INDEX_QUERY).get("numEntriesScannedInFilter").asLong(), numTotalDocs);
 
     // Update table config and trigger reload
     TableConfig tableConfig = getOfflineTableConfig();
     tableConfig.getIndexingConfig().setRangeIndexColumns(UPDATED_RANGE_INDEX_COLUMNS);
     updateTableConfig(tableConfig);
     reloadOfflineTable(getTableName());
-
     TestUtils.waitForCondition(aVoid -> {
       try {
-        JsonNode queryResponse1 = postQuery(TEST_UPDATED_RANGE_INDEX_QUERY);
+        JsonNode queryResponse = postQuery(TEST_UPDATED_RANGE_INDEX_QUERY);
         // Total docs should not change during reload
-        assertEquals(queryResponse1.get("totalDocs").asLong(), numTotalDocs);
-        return queryResponse1.get("numEntriesScannedInFilter").asLong() < numTotalDocs;
+        assertEquals(queryResponse.get("totalDocs").asLong(), numTotalDocs);
+        return queryResponse.get("numEntriesScannedInFilter").asLong() < numTotalDocs;
       } catch (Exception e) {
         throw new RuntimeException(e);
       }
     }, 600_000L, "Failed to generate range index");
+
+    // Update table config to remove the new range index, and
+    // reload table to clean the new range index physically.
+    tableConfig = getOfflineTableConfig();
+    tableConfig.getIndexingConfig().setRangeIndexColumns(getRangeIndexColumns());
+    updateTableConfig(tableConfig);
+    reloadOfflineTable(getTableName());
+    TestUtils.waitForCondition(aVoid -> {
+      try {
+        JsonNode queryResponse = postQuery(TEST_UPDATED_RANGE_INDEX_QUERY);
+        // Total docs should not change during reload, but num entries scanned
+        // gets back to total number of documents as the index is removed.
+        assertEquals(queryResponse.get("totalDocs").asLong(), numTotalDocs);
+        return queryResponse.get("numEntriesScannedInFilter").asLong() == numTotalDocs;
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }, 600_000L, "Failed to cleanup obsolete index");
+
+    assertEquals(getTableSize(getTableName()), _tableSizeAfterRemovingIndex);
   }
 
-  @Test
+  @Test(dependsOnMethods = "testDefaultColumns")
   public void testBloomFilterTriggering()
       throws Exception {
     long numTotalDocs = getCountStarResult();
-
-    JsonNode queryResponse = postQuery(TEST_UPDATED_BLOOM_FILTER_QUERY);
-    assertEquals(queryResponse.get("numSegmentsProcessed").asLong(), NUM_SEGMENTS);
+    assertEquals(postQuery(TEST_UPDATED_BLOOM_FILTER_QUERY).get("numSegmentsProcessed").asLong(), NUM_SEGMENTS);
 
     // Update table config and trigger reload
     TableConfig tableConfig = getOfflineTableConfig();
     tableConfig.getIndexingConfig().setBloomFilterColumns(UPDATED_BLOOM_FILTER_COLUMNS);
     updateTableConfig(tableConfig);
     reloadOfflineTable(getTableName());
-
     TestUtils.waitForCondition(aVoid -> {
       try {
-        JsonNode queryResponse1 = postQuery(TEST_UPDATED_BLOOM_FILTER_QUERY);
+        JsonNode queryResponse = postQuery(TEST_UPDATED_BLOOM_FILTER_QUERY);
         // Total docs should not change during reload
-        assertEquals(queryResponse1.get("totalDocs").asLong(), numTotalDocs);
-        return queryResponse1.get("numSegmentsProcessed").asLong() == 0L;
+        assertEquals(queryResponse.get("totalDocs").asLong(), numTotalDocs);
+        return queryResponse.get("numSegmentsProcessed").asLong() == 0L;
       } catch (Exception e) {
         throw new RuntimeException(e);
       }
     }, 600_000L, "Failed to generate bloom filter");
+
+    // Update table config to remove the new bloom filter, and
+    // reload table to clean the new bloom filter physically.
+    tableConfig = getOfflineTableConfig();
+    tableConfig.getIndexingConfig().setBloomFilterColumns(getBloomFilterColumns());
+    updateTableConfig(tableConfig);
+    reloadOfflineTable(getTableName());
+    TestUtils.waitForCondition(aVoid -> {
+      try {
+        JsonNode queryResponse = postQuery(TEST_UPDATED_BLOOM_FILTER_QUERY);
+        // Total docs should not change during reload, but num entries scanned
+        // gets back to total number of documents as bloom filter is removed.
+        assertEquals(queryResponse.get("totalDocs").asLong(), numTotalDocs);
+        return queryResponse.get("numSegmentsProcessed").asLong() == NUM_SEGMENTS;
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }, 600_000L, "Failed to cleanup obsolete index");
+    assertEquals(getTableSize(getTableName()), _tableSizeAfterRemovingIndex);
   }
 
   /** Check if server returns error response quickly without timing out Broker. */
@@ -578,6 +678,7 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
   public void testStarTreeTriggering()
       throws Exception {
     long numTotalDocs = getCountStarResult();
+    long tableSizeWithDefaultIndex = getTableSize(getTableName());
 
     // Test the first query
     JsonNode firstQueryResponse = postQuery(TEST_STAR_TREE_QUERY_1);
@@ -686,6 +787,7 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
         throw new RuntimeException(e);
       }
     }, 600_000L, "Failed to remove star-tree index");
+    assertEquals(getTableSize(getTableName()), tableSizeWithDefaultIndex);
 
     // First query should not be able to use the star-tree
     firstQueryResponse = postQuery(TEST_STAR_TREE_QUERY_1);
@@ -722,7 +824,7 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
    *   <li>"NewAddedDerivedSecondsSinceEpoch", DIMENSION, LONG, single-value, default (LONG.MIN_VALUE)</li>
    * </ul>
    */
-  @Test
+  @Test(dependsOnMethods = "testAggregateMetadataAPI")
   public void testDefaultColumns()
       throws Exception {
     long numTotalDocs = getCountStarResult();
@@ -743,6 +845,8 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     queryResponse = postQuery(SELECT_STAR_QUERY);
     assertEquals(queryResponse.get("totalDocs").asLong(), numTotalDocs);
     assertEquals(queryResponse.get("selectionResults").get("columns").size(), 79);
+
+    _tableSizeAfterRemovingIndex = getTableSize(getTableName());
   }
 
   private void reloadWithExtraColumns()
@@ -1065,7 +1169,7 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     JsonNode response = postQuery(pqlQuery);
     ArrayNode selectionResults = (ArrayNode) response.get("selectionResults").get("results");
     assertNotNull(selectionResults);
-    assertTrue(selectionResults.size() > 0);
+    assertFalse(selectionResults.isEmpty());
     for (int i = 0; i < selectionResults.size(); i++) {
       long daysSinceEpoch = selectionResults.get(i).get(0).asLong();
       long secondsSinceEpoch = selectionResults.get(i).get(1).asLong();
@@ -1078,7 +1182,7 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     response = postQuery(pqlQuery);
     selectionResults = (ArrayNode) response.get("selectionResults").get("results");
     assertNotNull(selectionResults);
-    assertTrue(selectionResults.size() > 0);
+    assertFalse(selectionResults.isEmpty());
     long prevValue = -1;
     for (int i = 0; i < selectionResults.size(); i++) {
       long daysSinceEpoch = selectionResults.get(i).get(0).asLong();
@@ -1094,7 +1198,7 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     response = postQuery(pqlQuery);
     selectionResults = (ArrayNode) response.get("selectionResults").get("results");
     assertNotNull(selectionResults);
-    assertTrue(selectionResults.size() > 0);
+    assertFalse(selectionResults.isEmpty());
     prevValue = Long.MAX_VALUE;
     for (int i = 0; i < selectionResults.size(); i++) {
       long daysSinceEpoch = selectionResults.get(i).get(0).asLong();

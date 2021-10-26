@@ -18,6 +18,7 @@
  */
 package org.apache.pinot.spi.env;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -31,7 +32,9 @@ import org.apache.commons.configuration.Configuration;
 import org.apache.commons.configuration.ConfigurationException;
 import org.apache.commons.configuration.MapConfiguration;
 import org.apache.commons.configuration.PropertiesConfiguration;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.pinot.spi.ingestion.batch.spec.PinotFSSpec;
+import org.apache.pinot.spi.utils.Obfuscator;
 
 
 /**
@@ -353,7 +356,12 @@ public class PinotConfiguration {
    * @return the property String value. Fallback to default value if missing.
    */
   public String getProperty(String name, String defaultValue) {
-    return getRawProperty(name, defaultValue).toString();
+    Object rawProperty = getRawProperty(name, defaultValue);
+    if (rawProperty instanceof List) {
+      return StringUtils.join(((ArrayList) rawProperty).toArray(), ',');
+    } else {
+      return rawProperty.toString();
+    }
   }
 
   private <T> T getProperty(String name, T defaultValue, Class<T> returnType) {
@@ -399,10 +407,6 @@ public class PinotConfiguration {
    *
    * @param name of the property to overwrite in memory. Applies relaxed binding on the property name.
    * @param value to overwrite in memory
-   *
-   * @deprecated Configurations should be immutable. Prefer creating a new {@link #PinotConfiguration} with base
-   * properties to overwrite
-   * properties.
    */
   public void setProperty(String name, Object value) {
     _configuration.setProperty(relaxPropertyName(name), value);
@@ -440,5 +444,10 @@ public class PinotConfiguration {
    */
   public Map<String, Object> toMap() {
     return CommonsConfigurationUtils.toMap(_configuration);
+  }
+
+  @Override
+  public String toString() {
+    return new Obfuscator().toJsonString(this);
   }
 }

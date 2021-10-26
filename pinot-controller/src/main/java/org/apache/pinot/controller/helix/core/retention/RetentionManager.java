@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import org.apache.commons.lang.StringUtils;
 import org.apache.helix.ZNRecord;
 import org.apache.helix.model.IdealState;
 import org.apache.pinot.common.lineage.LineageEntry;
@@ -79,8 +80,13 @@ public class RetentionManager extends ControllerPeriodicTask<Void> {
 
   @Override
   protected void processTable(String tableNameWithType) {
-    LOGGER.info("Start managing retention for table: {}", tableNameWithType);
+    // Manage normal table retention except segment lineage cleanup.
+    // The reason of separating the logic is that REFRESH only table will be skipped in the first part,
+    // whereas the segment lineage cleanup needs to be handled.
     manageRetentionForTable(tableNameWithType);
+
+    // Delete segments based on segment lineage and clean up segment lineage metadata.
+    manageSegmentLineageCleanupForTable(tableNameWithType);
   }
 
   @Override
@@ -90,6 +96,7 @@ public class RetentionManager extends ControllerPeriodicTask<Void> {
   }
 
   private void manageRetentionForTable(String tableNameWithType) {
+    LOGGER.info("Start managing retention for table: {}", tableNameWithType);
 
     // Build retention strategy from table config
     TableConfig tableConfig = _pinotHelixResourceManager.getTableConfig(tableNameWithType);
@@ -102,7 +109,7 @@ public class RetentionManager extends ControllerPeriodicTask<Void> {
     SegmentsValidationAndRetentionConfig validationConfig = tableConfig.getValidationConfig();
     String segmentPushType = IngestionConfigUtils.getBatchSegmentIngestionType(tableConfig);
     if (tableConfig.getTableType() == TableType.OFFLINE && !"APPEND".equalsIgnoreCase(segmentPushType)) {
-      LOGGER.info("Segment push type is not APPEND for table: {}, skip", tableNameWithType);
+      LOGGER.info("Segment push type is not APPEND for table: {}, skip managing retention", tableNameWithType);
       return;
     }
     String retentionTimeUnit = validationConfig.getRetentionTimeUnit();
@@ -123,9 +130,6 @@ public class RetentionManager extends ControllerPeriodicTask<Void> {
     } else {
       manageRetentionForRealtimeTable(tableNameWithType, retentionStrategy);
     }
-
-    // Delete segments based on segment lineage and clean up segment lineage metadata
-    manageSegmentLineageCleanupForTable(tableNameWithType);
   }
 
   private void manageRetentionForOfflineTable(String offlineTableName, RetentionStrategy retentionStrategy) {
@@ -202,6 +206,8 @@ public class RetentionManager extends ControllerPeriodicTask<Void> {
         if (segmentLineageZNRecord == null) {
           return true;
         }
+        LOGGER.info("Start cleaning up segment lineage for table: {}", tableNameWithType);
+        long cleanupStartTime = System.currentTimeMillis();
         SegmentLineage segmentLineage = SegmentLineage.fromZNRecord(segmentLineageZNRecord);
         int expectedVersion = segmentLineageZNRecord.getVersion();
 
@@ -246,8 +252,13 @@ public class RetentionManager extends ControllerPeriodicTask<Void> {
             .writeSegmentLineage(_pinotHelixResourceManager.getPropertyStore(), segmentLineage, expectedVersion)) {
           // Delete segments based on the segment lineage
           _pinotHelixResourceManager.deleteSegments(tableNameWithType, segmentsToDelete);
+          LOGGER.info("Finished cleaning up segment lineage for table: {}, deleted segments: {} in {}ms",
+              tableNameWithType, StringUtils.join(segmentsToDelete, ","),
+              (System.currentTimeMillis() - cleanupStartTime));
           return true;
         } else {
+          LOGGER.warn("Failed to write segment lineage back when cleaning up segment lineage for table: {}",
+              tableNameWithType);
           return false;
         }
       });

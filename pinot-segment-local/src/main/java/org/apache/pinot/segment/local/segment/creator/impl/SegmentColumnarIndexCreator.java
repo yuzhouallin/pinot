@@ -34,7 +34,9 @@ import org.apache.commons.configuration.PropertiesConfiguration;
 import org.apache.pinot.common.utils.FileUtils;
 import org.apache.pinot.segment.local.io.util.PinotDataBitSet;
 import org.apache.pinot.segment.local.io.writer.impl.BaseChunkSVForwardIndexWriter;
+import org.apache.pinot.segment.local.segment.creator.impl.fwd.MultiValueFixedByteRawIndexCreator;
 import org.apache.pinot.segment.local.segment.creator.impl.fwd.MultiValueUnsortedForwardIndexCreator;
+import org.apache.pinot.segment.local.segment.creator.impl.fwd.MultiValueVarByteRawIndexCreator;
 import org.apache.pinot.segment.local.segment.creator.impl.fwd.SingleValueFixedByteRawIndexCreator;
 import org.apache.pinot.segment.local.segment.creator.impl.fwd.SingleValueSortedForwardIndexCreator;
 import org.apache.pinot.segment.local.segment.creator.impl.fwd.SingleValueUnsortedForwardIndexCreator;
@@ -79,6 +81,7 @@ import org.joda.time.format.DateTimeFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.apache.pinot.segment.spi.V1Constants.MetadataKeys.Column.*;
 import static org.apache.pinot.segment.spi.V1Constants.MetadataKeys.Segment.*;
 
@@ -228,10 +231,6 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
         }
       } else {
         // Create raw index
-
-        // TODO: add support to multi-value column and inverted index
-        Preconditions.checkState(fieldSpec.isSingleValueField(), "Cannot create raw index for multi-value column: %s",
-            columnName);
         Preconditions.checkState(!invertedIndexColumns.contains(columnName),
             "Cannot create inverted index for raw index column: %s", columnName);
 
@@ -241,9 +240,16 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
         boolean deriveNumDocsPerChunk =
             shouldDeriveNumDocsPerChunk(columnName, segmentCreationSpec.getColumnProperties());
         int writerVersion = rawIndexWriterVersion(columnName, segmentCreationSpec.getColumnProperties());
-        _forwardIndexCreatorMap.put(columnName,
-            getRawIndexCreatorForColumn(_indexDir, compressionType, columnName, storedType, _totalDocs,
-                indexCreationInfo.getLengthOfLongestEntry(), deriveNumDocsPerChunk, writerVersion));
+        if (fieldSpec.isSingleValueField()) {
+          _forwardIndexCreatorMap.put(columnName,
+              getRawIndexCreatorForSVColumn(_indexDir, compressionType, columnName, storedType, _totalDocs,
+                  indexCreationInfo.getLengthOfLongestEntry(), deriveNumDocsPerChunk, writerVersion));
+        } else {
+          _forwardIndexCreatorMap.put(columnName,
+              getRawIndexCreatorForMVColumn(_indexDir, compressionType, columnName, storedType, _totalDocs,
+                  indexCreationInfo.getMaxNumberOfMultiValueElements(), deriveNumDocsPerChunk, writerVersion,
+                  indexCreationInfo.getMaxRowLengthInBytes()));
+        }
       }
 
       if (textIndexColumns.contains(columnName)) {
@@ -366,10 +372,6 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
     String column = spec.getName();
     if (config.getRawIndexCreationColumns().contains(column) || config.getRawIndexCompressionType()
         .containsKey(column)) {
-      if (!spec.isSingleValueField()) {
-        throw new RuntimeException(
-            "Creation of indices without dictionaries is supported for single valued columns only.");
-      }
       return false;
     }
     return info.isCreateDictionary();
@@ -387,16 +389,19 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
         throw new RuntimeException("Null value for column:" + columnName);
       }
 
-      boolean isSingleValue = _schema.getFieldSpecFor(columnName).isSingleValueField();
+      FieldSpec fieldSpec = _schema.getFieldSpecFor(columnName);
+
+      //get dictionaryCreator, will be null if column is not dictionaryEncoded
       SegmentDictionaryCreator dictionaryCreator = _dictionaryCreatorMap.get(columnName);
 
-      if (isSingleValue) {
-        // SV column
-        // text-index enabled SV column
-        TextIndexCreator textIndexCreator = _textIndexCreatorMap.get(columnName);
-        if (textIndexCreator != null) {
-          textIndexCreator.add((String) columnValueToIndex);
-        }
+      // text-index
+      TextIndexCreator textIndexCreator = _textIndexCreatorMap.get(columnName);
+      if (textIndexCreator != null) {
+        textIndexCreator.add((String) columnValueToIndex);
+      }
+
+      if (fieldSpec.isSingleValueField()) {
+        // Single Value column
         JsonIndexCreator jsonIndexCreator = _jsonIndexCreatorMap.get(columnName);
         if (jsonIndexCreator != null) {
           jsonIndexCreator.add((String) columnValueToIndex);
@@ -452,12 +457,94 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
           }
         }
       } else {
-        // MV column (always dictionary encoded)
-        int[] dictIds = dictionaryCreator.indexOfMV(columnValueToIndex);
-        forwardIndexCreator.putDictIdMV(dictIds);
-        DictionaryBasedInvertedIndexCreator invertedIndexCreator = _invertedIndexCreatorMap.get(columnName);
-        if (invertedIndexCreator != null) {
-          invertedIndexCreator.add(dictIds, dictIds.length);
+        if (dictionaryCreator != null) {
+          //dictionary encoded
+          int[] dictIds = dictionaryCreator.indexOfMV(columnValueToIndex);
+          forwardIndexCreator.putDictIdMV(dictIds);
+          DictionaryBasedInvertedIndexCreator invertedIndexCreator = _invertedIndexCreatorMap
+              .get(columnName);
+          if (invertedIndexCreator != null) {
+            invertedIndexCreator.add(dictIds, dictIds.length);
+          }
+        } else {
+          // for text index on raw columns, check the config to determine if actual raw value should
+          // be stored or not
+          if (textIndexCreator != null && !shouldStoreRawValueForTextIndex(columnName)) {
+            Object value = _columnProperties.get(columnName)
+                .get(FieldConfig.TEXT_INDEX_RAW_VALUE);
+            if (value == null) {
+              value = FieldConfig.TEXT_INDEX_DEFAULT_RAW_VALUE;
+            }
+            if (forwardIndexCreator.getValueType().getStoredType() == DataType.STRING) {
+              columnValueToIndex = new String[] {String.valueOf(value)};
+            } else if (forwardIndexCreator.getValueType().getStoredType() == DataType.BYTES) {
+              columnValueToIndex = new byte[][] {String.valueOf(value).getBytes(UTF_8)};
+            } else {
+              throw new RuntimeException("Text Index is only supported for STRING and BYTES stored type");
+            }
+          }
+          switch (forwardIndexCreator.getValueType()) {
+            case INT:
+              if (columnValueToIndex instanceof Object[]) {
+                int[] array = new int[((Object[]) columnValueToIndex).length];
+                for (int i = 0; i < array.length; i++) {
+                  array[i] = (Integer) ((Object[]) columnValueToIndex)[i];
+                }
+                forwardIndexCreator.putIntMV(array);
+              }
+              break;
+            case LONG:
+              if (columnValueToIndex instanceof Object[]) {
+                long[] array = new long[((Object[]) columnValueToIndex).length];
+                for (int i = 0; i < array.length; i++) {
+                  array[i] = (Long) ((Object[]) columnValueToIndex)[i];
+                }
+                forwardIndexCreator.putLongMV(array);
+              }
+              break;
+            case FLOAT:
+              if (columnValueToIndex instanceof Object[]) {
+                float[] array = new float[((Object[]) columnValueToIndex).length];
+                for (int i = 0; i < array.length; i++) {
+                  array[i] = (Float) ((Object[]) columnValueToIndex)[i];
+                }
+                forwardIndexCreator.putFloatMV(array);
+              }
+              break;
+            case DOUBLE:
+              if (columnValueToIndex instanceof Object[]) {
+                double[] array = new double[((Object[]) columnValueToIndex).length];
+                for (int i = 0; i < array.length; i++) {
+                  array[i] = (Double) ((Object[]) columnValueToIndex)[i];
+                }
+                forwardIndexCreator.putDoubleMV(array);
+              }
+              break;
+            case STRING:
+              if (columnValueToIndex instanceof String[]) {
+                forwardIndexCreator.putStringMV((String[]) columnValueToIndex);
+              } else if (columnValueToIndex instanceof Object[]) {
+                String[] array = new String[((Object[]) columnValueToIndex).length];
+                for (int i = 0; i < array.length; i++) {
+                  array[i] = (String) ((Object[]) columnValueToIndex)[i];
+                }
+                forwardIndexCreator.putStringMV(array);
+              }
+              break;
+            case BYTES:
+              if (columnValueToIndex instanceof byte[][]) {
+                forwardIndexCreator.putBytesMV((byte[][]) columnValueToIndex);
+              } else if (columnValueToIndex instanceof Object[]) {
+                byte[][] array = new byte[((Object[]) columnValueToIndex).length][];
+                for (int i = 0; i < array.length; i++) {
+                  array[i] = (byte[]) ((Object[]) columnValueToIndex)[i];
+                }
+                forwardIndexCreator.putBytesMV(array);
+              }
+              break;
+            default:
+              throw new IllegalStateException();
+          }
         }
       }
 
@@ -734,9 +821,8 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
    * @param deriveNumDocsPerChunk true if varbyte writer should auto-derive the number of rows per chunk
    * @param writerVersion version to use for the raw index writer
    * @return raw index creator
-   * @throws IOException
    */
-  public static ForwardIndexCreator getRawIndexCreatorForColumn(File file, ChunkCompressionType compressionType,
+  public static ForwardIndexCreator getRawIndexCreatorForSVColumn(File file, ChunkCompressionType compressionType,
       String column, DataType dataType, int totalDocs, int lengthOfLongestEntry, boolean deriveNumDocsPerChunk,
       int writerVersion)
       throws IOException {
@@ -753,6 +839,40 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
             lengthOfLongestEntry, deriveNumDocsPerChunk, writerVersion);
       default:
         throw new UnsupportedOperationException("Data type not supported for raw indexing: " + dataType);
+    }
+  }
+
+  /**
+   * Helper method to build the raw index creator for the column.
+   * Assumes that column to be indexed is single valued.
+   *
+   * @param file Output index file
+   * @param column Column name
+   * @param totalDocs Total number of documents to index
+   * @param deriveNumDocsPerChunk true if varbyte writer should auto-derive the number of rows
+   *     per chunk
+   * @param writerVersion version to use for the raw index writer
+   * @param maxRowLengthInBytes the length of the longest row in bytes
+   * @return raw index creator
+   */
+  public static ForwardIndexCreator getRawIndexCreatorForMVColumn(File file, ChunkCompressionType compressionType,
+      String column, DataType dataType, final int totalDocs, int maxNumberOfMultiValueElements,
+      boolean deriveNumDocsPerChunk, int writerVersion, int maxRowLengthInBytes)
+      throws IOException {
+    switch (dataType.getStoredType()) {
+      case INT:
+      case LONG:
+      case FLOAT:
+      case DOUBLE:
+        return new MultiValueFixedByteRawIndexCreator(file, compressionType, column, totalDocs, dataType,
+            maxNumberOfMultiValueElements, deriveNumDocsPerChunk, writerVersion);
+      case STRING:
+      case BYTES:
+        return new MultiValueVarByteRawIndexCreator(file, compressionType, column, totalDocs, dataType, writerVersion,
+            maxRowLengthInBytes, maxNumberOfMultiValueElements);
+      default:
+        throw new UnsupportedOperationException(
+            "Data type not supported for raw indexing: " + dataType);
     }
   }
 

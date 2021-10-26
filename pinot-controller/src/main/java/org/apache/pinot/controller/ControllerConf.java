@@ -66,9 +66,13 @@ public class ControllerConf extends PinotConfiguration {
   public static final String CONTROLLER_MODE = "controller.mode";
   public static final String LEAD_CONTROLLER_RESOURCE_REBALANCE_STRATEGY = "controller.resource.rebalance.strategy";
 
-  // Comma separated list of list of packages that contain TableConfigTuners to be added to the registry
+  // Comma separated list of packages that contain TableConfigTuners to be added to the registry
   public static final String TABLE_CONFIG_TUNER_PACKAGES = "controller.table.config.tuner.packages";
   public static final String DEFAULT_TABLE_CONFIG_TUNER_PACKAGES = "org.apache.pinot";
+
+  // Comma separated list of packages that contains javax service resources.
+  public static final String CONTROLLER_RESOURCE_PACKAGES = "controller.restlet.api.resource.packages";
+  public static final String DEFAULT_CONTROLLER_RESOURCE_PACKAGES = "org.apache.pinot.controller.api.resources";
 
   public enum ControllerMode {
     DUAL, PINOT_ONLY, HELIX_ONLY
@@ -172,6 +176,11 @@ public class ControllerConf extends PinotConfiguration {
         "controller.realtimeSegmentRelocation.initialDelayInSeconds";
     public static final String SEGMENT_RELOCATOR_INITIAL_DELAY_IN_SECONDS =
         "controller.segmentRelocator.initialDelayInSeconds";
+
+    // The flag to indicate if controller periodic job will fix the missing LLC segment deep store copy.
+    // Default value is false.
+    public static final String ENABLE_DEEP_STORE_RETRY_UPLOAD_LLC_SEGMENT =
+        "controller.realtime.segment.deepStoreUploadRetryEnabled";
 
     public static final int MIN_INITIAL_DELAY_IN_SECONDS = 120;
     public static final int MAX_INITIAL_DELAY_IN_SECONDS = 300;
@@ -758,6 +767,10 @@ public class ControllerConf extends PinotConfiguration {
         getPeriodicTaskInitialDelayInSeconds());
   }
 
+  public boolean isDeepStoreRetryUploadLLCSegmentEnabled() {
+    return getProperty(ControllerPeriodicTasksConf.ENABLE_DEEP_STORE_RETRY_UPLOAD_LLC_SEGMENT, false);
+  }
+
   public long getPinotTaskManagerInitialDelaySeconds() {
     return getPeriodicTaskInitialDelayInSeconds();
   }
@@ -822,6 +835,10 @@ public class ControllerConf extends PinotConfiguration {
   public List<String> getTableConfigTunerPackages() {
     return Arrays
         .asList(getProperty(TABLE_CONFIG_TUNER_PACKAGES, DEFAULT_TABLE_CONFIG_TUNER_PACKAGES).split("\\s*,\\s*"));
+  }
+
+  public String getControllerResourcePackages() {
+    return getProperty(CONTROLLER_RESOURCE_PACKAGES, DEFAULT_CONTROLLER_RESOURCE_PACKAGES);
   }
 
   private long convertPeriodToUnit(String period, TimeUnit timeUnitToConvertTo) {

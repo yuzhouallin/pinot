@@ -51,12 +51,13 @@ import org.apache.pinot.spi.data.readers.RecordReaderFactory;
 import org.apache.pinot.spi.stream.StreamDataProducer;
 import org.apache.pinot.spi.stream.StreamDataProvider;
 import org.apache.pinot.spi.utils.JsonUtils;
-import org.apache.pinot.spi.utils.StringUtils;
 import org.apache.pinot.spi.utils.builder.TableNameBuilder;
 import org.apache.pinot.tools.utils.KafkaStarterUtils;
 import org.apache.pinot.util.TestUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 
 /**
@@ -247,10 +248,10 @@ public class StreamOp extends BaseOp {
           }
 
           if (partitionColumn == null) {
-            producer.produce(topicName, StringUtils.encodeUtf8(extractedJson.toString()));
+            producer.produce(topicName, extractedJson.toString().getBytes(UTF_8));
           } else {
-            producer.produce(topicName, StringUtils.encodeUtf8(partitionColumn),
-                StringUtils.encodeUtf8(extractedJson.toString()));
+            producer.produce(topicName, partitionColumn.getBytes(UTF_8),
+                extractedJson.toString().getBytes(UTF_8));
           }
           count++;
         }
@@ -276,7 +277,7 @@ public class StreamOp extends BaseOp {
       throw new RuntimeException(errorMsg);
     }
 
-    if (response.has(EXCEPTIONS) && response.get(EXCEPTIONS).size() > 0) {
+    if (response.has(EXCEPTIONS) && !response.get(EXCEPTIONS).isEmpty()) {
       String errorMsg =
           String.format("Failed when running query: '%s'; got exceptions:\n%s\n", query, response.toPrettyString());
       JsonNode exceptions = response.get(EXCEPTIONS);

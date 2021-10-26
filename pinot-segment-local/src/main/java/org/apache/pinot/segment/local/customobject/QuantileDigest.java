@@ -42,7 +42,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
-import static java.lang.String.format;
 
 
 /**
@@ -422,7 +421,7 @@ public class QuantileDigest {
 
   @VisibleForTesting
   void compress() {
-    ++_compressions;
+    _compressions++;
 
     final int compressionFactor = calculateCompressionFactor();
 
@@ -464,7 +463,7 @@ public class QuantileDigest {
         }
 
         if (oldNodeWeight < ZERO_WEIGHT_THRESHOLD && node._weightedCount >= ZERO_WEIGHT_THRESHOLD) {
-          ++_nonZeroNodeCount;
+          _nonZeroNodeCount++;
         }
 
         return true;
@@ -495,7 +494,7 @@ public class QuantileDigest {
         node._weightedCount *= factor;
 
         if (oldWeight >= ZERO_WEIGHT_THRESHOLD && node._weightedCount < ZERO_WEIGHT_THRESHOLD) {
-          --_nonZeroNodeCount;
+          _nonZeroNodeCount--;
         }
 
         return true;
@@ -535,7 +534,7 @@ public class QuantileDigest {
         current._weightedCount += weight;
 
         if (current._weightedCount >= ZERO_WEIGHT_THRESHOLD && oldWeight < ZERO_WEIGHT_THRESHOLD) {
-          ++_nonZeroNodeCount;
+          _nonZeroNodeCount++;
         }
 
         _weightedCount += weight;
@@ -591,7 +590,7 @@ public class QuantileDigest {
 
   private Node createNode(long bits, int level, double weight) {
     _weightedCount += weight;
-    ++_totalNodeCount;
+    _totalNodeCount++;
     if (weight >= ZERO_WEIGHT_THRESHOLD) {
       _nonZeroNodeCount++;
     }
@@ -670,17 +669,17 @@ public class QuantileDigest {
     }
 
     if (node._weightedCount >= ZERO_WEIGHT_THRESHOLD) {
-      --_nonZeroNodeCount;
+      _nonZeroNodeCount--;
     }
 
     _weightedCount -= node._weightedCount;
 
     Node result = null;
     if (node.isLeaf()) {
-      --_totalNodeCount;
+      _totalNodeCount--;
     } else if (node.hasSingleChild()) {
       result = node.getSingleChild();
-      --_totalNodeCount;
+      _totalNodeCount--;
     } else {
       node._weightedCount = 0;
       result = node;
@@ -865,10 +864,10 @@ public class QuantileDigest {
 
     for (Node node : nodes) {
       if (node._left != null) {
-        builder.append(format("\t%s -> %s;\n", idFor(node), idFor(node._left)));
+        builder.append(String.format("\t%s -> %s;\n", idFor(node), idFor(node._left)));
       }
       if (node._right != null) {
-        builder.append(format("\t%s -> %s;\n", idFor(node), idFor(node._right)));
+        builder.append(String.format("\t%s -> %s;\n", idFor(node), idFor(node._right)));
       }
     }
 
@@ -1007,8 +1006,8 @@ public class QuantileDigest {
 
     @Override
     public String toString() {
-      return format("%s (level = %d, count = %s, left = %s, right = %s)", _bits, _level, _weightedCount, _left != null,
-          _right != null);
+      return String.format("%s (level = %d, count = %s, left = %s, right = %s)", _bits, _level, _weightedCount,
+          _left != null, _right != null);
     }
 
     @Override

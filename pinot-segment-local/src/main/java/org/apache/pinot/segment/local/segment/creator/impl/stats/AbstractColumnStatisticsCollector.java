@@ -42,11 +42,12 @@ public abstract class AbstractColumnStatisticsCollector implements ColumnStatist
   protected static final int INITIAL_HASH_SET_SIZE = 1000;
   private Object _previousValue = null;
   protected final FieldSpec _fieldSpec;
-  private boolean _isSorted = true;
+  protected boolean _isSorted = true;
   private final String _column;
 
   protected int _totalNumberOfEntries = 0;
   protected int _maxNumberOfMultiValues = 0;
+  protected int _maxLengthOfMultiValues = 0;
   private PartitionFunction _partitionFunction;
   private final int _numPartitions;
   private final Set<Integer> _partitions;
@@ -70,6 +71,10 @@ public abstract class AbstractColumnStatisticsCollector implements ColumnStatist
 
   public int getMaxNumberOfMultiValues() {
     return _maxNumberOfMultiValues;
+  }
+
+  public int getMaxLengthOfMultiValues() {
+    return _maxLengthOfMultiValues;
   }
 
   void addressSorted(Object entry) {

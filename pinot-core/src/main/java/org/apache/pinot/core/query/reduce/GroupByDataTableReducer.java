@@ -55,7 +55,7 @@ import org.apache.pinot.core.query.aggregation.groupby.AggregationGroupByTrimmin
 import org.apache.pinot.core.query.request.context.QueryContext;
 import org.apache.pinot.core.transport.ServerRoutingInstance;
 import org.apache.pinot.core.util.GroupByUtils;
-import org.apache.pinot.core.util.QueryOptions;
+import org.apache.pinot.core.util.QueryOptionsUtils;
 import org.apache.pinot.core.util.trace.TraceRunnable;
 
 
@@ -86,10 +86,10 @@ public class GroupByDataTableReducer implements DataTableReducer {
     assert _groupByExpressions != null;
     _numGroupByExpressions = _groupByExpressions.size();
     _numColumns = _numAggregationFunctions + _numGroupByExpressions;
-    QueryOptions queryOptions = new QueryOptions(queryContext.getQueryOptions());
-    _preserveType = queryOptions.isPreserveType();
-    _groupByModeSql = queryOptions.isGroupByModeSQL();
-    _responseFormatSql = queryOptions.isResponseFormatSQL();
+    Map<String, String> queryOptions = queryContext.getQueryOptions();
+    _preserveType = QueryOptionsUtils.isPreserveType(queryOptions);
+    _groupByModeSql = QueryOptionsUtils.isGroupByModeSQL(queryOptions);
+    _responseFormatSql = QueryOptionsUtils.isResponseFormatSQL(queryOptions);
     _sqlQuery = queryContext.getBrokerRequest().getPinotQuery() != null;
   }
 
@@ -294,20 +294,25 @@ public class GroupByDataTableReducer implements DataTableReducer {
     // Get the number of threads to use for reducing.
     // In case of single reduce thread, fall back to SimpleIndexedTable to avoid redundant locking/unlocking calls.
     int numReduceThreadsToUse = getNumReduceThreadsToUse(numDataTables, reducerContext.getMaxReduceThreadsPerQuery());
-    int trimSize = GroupByUtils.getTableCapacity(_queryContext);
+    int limit = _queryContext.getLimit();
+    // TODO: Make minTrimSize configurable
+    int trimSize = GroupByUtils.getTableCapacity(limit);
+    // NOTE: For query with HAVING clause, use trimSize as resultSize to ensure the result accuracy.
+    // TODO: Resolve the HAVING clause within the IndexedTable before returning the result
+    int resultSize = _queryContext.getHavingFilter() != null ? trimSize : limit;
     int trimThreshold = reducerContext.getGroupByTrimThreshold();
     IndexedTable indexedTable;
     if (numReduceThreadsToUse <= 1) {
-      indexedTable = new SimpleIndexedTable(dataSchema, _queryContext, trimSize, trimThreshold);
+      indexedTable = new SimpleIndexedTable(dataSchema, _queryContext, resultSize, trimSize, trimThreshold);
     } else {
       if (trimThreshold >= GroupByOrderByCombineOperator.MAX_TRIM_THRESHOLD) {
         // special case of trim threshold where it is set to max value.
         // there won't be any trimming during upsert in this case.
         // thus we can avoid the overhead of read-lock and write-lock
         // in the upsert method.
-        indexedTable = new UnboundedConcurrentIndexedTable(dataSchema, _queryContext, trimSize, trimThreshold);
+        indexedTable = new UnboundedConcurrentIndexedTable(dataSchema, _queryContext, resultSize);
       } else {
-        indexedTable = new ConcurrentIndexedTable(dataSchema, _queryContext, trimSize, trimThreshold);
+        indexedTable = new ConcurrentIndexedTable(dataSchema, _queryContext, resultSize, trimSize, trimThreshold);
       }
     }
 

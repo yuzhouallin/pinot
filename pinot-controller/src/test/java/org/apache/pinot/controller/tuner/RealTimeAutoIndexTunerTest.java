@@ -19,6 +19,7 @@
 package org.apache.pinot.controller.tuner;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,12 +59,11 @@ public class RealTimeAutoIndexTunerTest {
 
   @Test
   public void testTuner() {
-    TableConfig tableConfig =
-        new TableConfigBuilder(TableType.OFFLINE).setTableName("test").setTunerConfig(_tunerConfig).build();
+    TableConfig tableConfig = new TableConfigBuilder(TableType.OFFLINE)
+        .setTableName("test").setTunerConfigList(Arrays.asList(_tunerConfig)).build();
     TableConfigTunerRegistry.init(Arrays.asList(DEFAULT_TABLE_CONFIG_TUNER_PACKAGES));
     TableConfigTuner tuner = TableConfigTunerRegistry.getTuner(TUNER_NAME);
-    tuner.init(null, _tunerConfig, _schema);
-    TableConfig result = tuner.apply(tableConfig);
+    TableConfig result = tuner.apply(null, tableConfig, _schema, Collections.emptyMap());
 
     IndexingConfig newConfig = result.getIndexingConfig();
     List<String> invertedIndexColumns = newConfig.getInvertedIndexColumns();
