@@ -33,9 +33,13 @@ import org.apache.pinot.tools.admin.command.QuickstartRunner;
 
 
 public class Quickstart extends QuickStartBase {
+  @Override
+  public List<String> types() {
+    return Arrays.asList("OFFLINE", "BATCH");
+  }
+
   private static final String TAB = "\t\t";
   private static final String NEW_LINE = "\n";
-
 
   public enum Color {
     RESET("\u001B[0m"), GREEN("\u001B[32m"), YELLOW("\u001B[33m"), CYAN("\u001B[36m");
@@ -215,14 +219,16 @@ public class Quickstart extends QuickStartBase {
     printStatus(Color.GREEN, "***************************************************");
 
     String q3 =
-        "select playerName, sum(runs) from baseballStats where yearID=2000 group by playerName order by sum(runs) desc limit 5";
+        "select playerName, sum(runs) from baseballStats where yearID=2000 group by playerName order by sum(runs) "
+            + "desc limit 5";
     printStatus(Color.YELLOW, "Top 5 run scorers of the year 2000");
     printStatus(Color.CYAN, "Query : " + q3);
     printStatus(Color.YELLOW, prettyPrintResponse(runner.runQuery(q3)));
     printStatus(Color.GREEN, "***************************************************");
 
     String q4 =
-        "select playerName, sum(runs) from baseballStats where yearID>=2000 group by playerName order by sum(runs) desc limit 10";
+        "select playerName, sum(runs) from baseballStats where yearID>=2000 group by playerName order by sum(runs) "
+            + "desc limit 10";
     printStatus(Color.YELLOW, "Top 10 run scorers after 2000");
     printStatus(Color.CYAN, "Query : " + q4);
     printStatus(Color.YELLOW, prettyPrintResponse(runner.runQuery(q4)));

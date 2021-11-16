@@ -19,6 +19,9 @@
 package org.apache.pinot.segment.spi;
 
 public class V1Constants {
+  private V1Constants() {
+  }
+
   public static final String SEGMENT_CREATION_META = "creation.meta";
   public static final String INDEX_MAP_FILE_NAME = "index_map";
   public static final String INDEX_FILE_NAME = "columns.psf";
@@ -36,6 +39,7 @@ public class V1Constants {
     public static final String UNSORTED_SV_FORWARD_INDEX_FILE_EXTENSION = ".sv.unsorted.fwd";
     public static final String SORTED_SV_FORWARD_INDEX_FILE_EXTENSION = ".sv.sorted.fwd";
     public static final String RAW_SV_FORWARD_INDEX_FILE_EXTENSION = ".sv.raw.fwd";
+    public static final String RAW_MV_FORWARD_INDEX_FILE_EXTENSION = ".mv.raw.fwd";
     public static final String UNSORTED_MV_FORWARD_INDEX_FILE_EXTENSION = ".mv.fwd";
     public static final String BITMAP_INVERTED_INDEX_FILE_EXTENSION = ".bitmap.inv";
     public static final String BITMAP_RANGE_INDEX_FILE_EXTENSION = ".bitmap.range";
@@ -60,7 +64,8 @@ public class V1Constants {
       public static final String METRICS = "segment.metric.column.names";
       /**
        * The primary time column for the table. This will match the timeColumnName defined in the tableConfig.
-       * In the Pinot schema, this column can be defined as either a TimeFieldSpec (which is deprecated) or DateTimeFieldSpec
+       * In the Pinot schema, this column can be defined as either a TimeFieldSpec (which is deprecated) or
+       * DateTimeFieldSpec
        */
       public static final String TIME_COLUMN_NAME = "segment.time.column.name";
       public static final String TIME_UNIT = "segment.time.unit";

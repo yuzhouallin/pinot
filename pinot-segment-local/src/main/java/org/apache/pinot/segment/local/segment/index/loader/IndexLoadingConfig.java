@@ -27,13 +27,14 @@ import java.util.Map;
 import java.util.Set;
 import javax.annotation.Nullable;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.pinot.segment.local.loader.LocalSegmentDirectoryLoader;
 import org.apache.pinot.segment.local.segment.index.column.PhysicalColumnIndexContainer;
 import org.apache.pinot.segment.local.segment.index.loader.columnminmaxvalue.ColumnMinMaxValueGeneratorMode;
 import org.apache.pinot.segment.spi.creator.SegmentVersion;
 import org.apache.pinot.segment.spi.index.creator.H3IndexConfig;
+import org.apache.pinot.segment.spi.loader.SegmentDirectoryLoaderRegistry;
 import org.apache.pinot.spi.config.instance.InstanceDataManagerConfig;
 import org.apache.pinot.spi.config.table.BloomFilterConfig;
+import org.apache.pinot.spi.config.table.FSTType;
 import org.apache.pinot.spi.config.table.FieldConfig;
 import org.apache.pinot.spi.config.table.IndexingConfig;
 import org.apache.pinot.spi.config.table.StarTreeIndexConfig;
@@ -48,14 +49,16 @@ import org.apache.pinot.spi.utils.ReadMode;
  */
 public class IndexLoadingConfig {
   private static final int DEFAULT_REALTIME_AVG_MULTI_VALUE_COUNT = 2;
-  public static final String DEFAULT_TIER_BACKEND = "local";
+  public static final String READ_MODE_KEY = "readMode";
 
   private ReadMode _readMode = ReadMode.DEFAULT_MODE;
   private List<String> _sortedColumns = Collections.emptyList();
   private Set<String> _invertedIndexColumns = new HashSet<>();
   private Set<String> _rangeIndexColumns = new HashSet<>();
+  private int _rangeIndexVersion = IndexingConfig.DEFAULT_RANGE_INDEX_VERSION;
   private Set<String> _textIndexColumns = new HashSet<>();
   private Set<String> _fstIndexColumns = new HashSet<>();
+  private FSTType _fstIndexType = FSTType.LUCENE;
   private Set<String> _jsonIndexColumns = new HashSet<>();
   private Map<String, H3IndexConfig> _h3IndexConfigs = new HashMap<>();
   private Set<String> _noDictionaryColumns = new HashSet<>(); // TODO: replace this by _noDictionaryConfig.
@@ -80,8 +83,9 @@ public class IndexLoadingConfig {
   private Map<String, Map<String, String>> _columnProperties = new HashMap<>();
 
   private TableConfig _tableConfig;
-  private String _tierBackend;
-  private PinotConfiguration _tierConfigs;
+  private String _segmentDirectoryLoader;
+
+  private String _instanceId;
 
   public IndexLoadingConfig(InstanceDataManagerConfig instanceDataManagerConfig, TableConfig tableConfig) {
     extractFromInstanceConfig(instanceDataManagerConfig);
@@ -115,6 +119,10 @@ public class IndexLoadingConfig {
     if (rangeIndexColumns != null) {
       _rangeIndexColumns.addAll(rangeIndexColumns);
     }
+
+    _rangeIndexVersion = indexingConfig.getRangeIndexVersion();
+
+    _fstIndexType = indexingConfig.getFSTIndexType();
 
     List<String> bloomFilterColumns = indexingConfig.getBloomFilterColumns();
     if (bloomFilterColumns != null) {
@@ -222,6 +230,8 @@ public class IndexLoadingConfig {
     if (instanceDataManagerConfig == null) {
       return;
     }
+    _instanceId = instanceDataManagerConfig.getInstanceId();
+
     ReadMode instanceReadMode = instanceDataManagerConfig.getReadMode();
     if (instanceReadMode != null) {
       _readMode = instanceReadMode;
@@ -242,9 +252,9 @@ public class IndexLoadingConfig {
       _realtimeAvgMultiValueCount = Integer.valueOf(avgMultiValueCount);
     }
     _enableSplitCommitEndWithMetadata = instanceDataManagerConfig.isEnableSplitCommitEndWithMetadata();
-    _segmentStoreURI = instanceDataManagerConfig.getConfig().getProperty(CommonConstants.Server.CONFIG_OF_SEGMENT_STORE_URI);
-    _tierBackend = instanceDataManagerConfig.getTierBackend();
-    _tierConfigs = instanceDataManagerConfig.getTierConfigs();
+    _segmentStoreURI =
+        instanceDataManagerConfig.getConfig().getProperty(CommonConstants.Server.CONFIG_OF_SEGMENT_STORE_URI);
+    _segmentDirectoryLoader = instanceDataManagerConfig.getSegmentDirectoryLoader();
   }
 
   /**
@@ -274,6 +284,14 @@ public class IndexLoadingConfig {
 
   public Set<String> getRangeIndexColumns() {
     return _rangeIndexColumns;
+  }
+
+  public int getRangeIndexVersion() {
+    return _rangeIndexVersion;
+  }
+
+  public FSTType getFSTIndexType() {
+    return _fstIndexType;
   }
 
   /**
@@ -338,6 +356,11 @@ public class IndexLoadingConfig {
   @VisibleForTesting
   public void setFSTIndexColumns(Set<String> fstIndexColumns) {
     _fstIndexColumns = fstIndexColumns;
+  }
+
+  @VisibleForTesting
+  public void setFSTIndexType(FSTType fstType) {
+    _fstIndexType = fstType;
   }
 
   @VisibleForTesting
@@ -449,16 +472,18 @@ public class IndexLoadingConfig {
     _tableConfig = tableConfig;
   }
 
-  public String getTierBackend() {
-    return StringUtils.isNotBlank(_tierBackend) ? _tierBackend : DEFAULT_TIER_BACKEND;
+  public String getSegmentDirectoryLoader() {
+    return StringUtils.isNotBlank(_segmentDirectoryLoader) ? _segmentDirectoryLoader
+        : SegmentDirectoryLoaderRegistry.DEFAULT_SEGMENT_DIRECTORY_LOADER_NAME;
   }
 
-  public PinotConfiguration getTierConfigs() {
-    if (_tierConfigs == null) {
-      Map<String, Object> props = new HashMap<>();
-      props.put(LocalSegmentDirectoryLoader.READ_MODE_KEY, _readMode);
-      return new PinotConfiguration(props);
-    }
-    return _tierConfigs;
+  public PinotConfiguration getSegmentDirectoryConfigs() {
+    Map<String, Object> props = new HashMap<>();
+    props.put(READ_MODE_KEY, _readMode);
+    return new PinotConfiguration(props);
+  }
+
+  public String getInstanceId() {
+    return _instanceId;
   }
 }

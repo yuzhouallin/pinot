@@ -51,7 +51,8 @@ import org.slf4j.LoggerFactory;
 
 
 /**
- * A Hadoop job which provides partitioning, sorting, and resizing against the input files, which is raw data in either Avro or Orc format.
+ * A Hadoop job which provides partitioning, sorting, and resizing against the input files, which is raw data in
+ * either Avro or Orc format.
  * Thus, the output files are partitioned, sorted, resized after this job.
  * In order to run this job, the following configs need to be specified in job properties:
  * * enable.preprocessing: false by default. Enables preprocessing job.
@@ -62,9 +63,11 @@ public class HadoopSegmentPreprocessingJob extends SegmentPreprocessingJob {
   private String _partitionColumn;
   private int _numPartitions;
   private String _partitionFunction;
+  private String _partitionColumnDefaultNullValue;
 
   private String _sortingColumn;
   private FieldSpec.DataType _sortingColumnType;
+  private String _sortingColumnDefaultNullValue;
 
   private int _numOutputFiles;
   private int _maxNumRecordsPerFile;
@@ -100,7 +103,8 @@ public class HadoopSegmentPreprocessingJob extends SegmentPreprocessingJob {
         DataPreprocessingHelperFactory.generateDataPreprocessingHelper(_inputSegmentDir, _preprocessedOutputDir);
     dataPreprocessingHelper
         .registerConfigs(_tableConfig, _pinotTableSchema, _partitionColumn, _numPartitions, _partitionFunction,
-            _sortingColumn, _sortingColumnType, _numOutputFiles, _maxNumRecordsPerFile);
+            _partitionColumnDefaultNullValue, _sortingColumn, _sortingColumnType, _sortingColumnDefaultNullValue,
+            _numOutputFiles, _maxNumRecordsPerFile);
 
     Job job = dataPreprocessingHelper.setUpJob();
 
@@ -154,6 +158,8 @@ public class HadoopSegmentPreprocessingJob extends SegmentPreprocessingJob {
         _partitionColumn = columnPartitionMap.keySet().iterator().next();
         _numPartitions = segmentPartitionConfig.getNumPartitions(_partitionColumn);
         _partitionFunction = segmentPartitionConfig.getFunctionName(_partitionColumn);
+        _partitionColumnDefaultNullValue =
+            _pinotTableSchema.getFieldSpecFor(_partitionColumn).getDefaultNullValueString();
       }
     } else {
       LOGGER.info("Segment partition config is null for table: {}", _tableConfig.getTableName());
@@ -199,6 +205,9 @@ public class HadoopSegmentPreprocessingJob extends SegmentPreprocessingJob {
         LOGGER.info("Sorting the data with column: {} of type: {}", _sortingColumn, _sortingColumnType);
       }
     }
+    if (_sortingColumn != null) {
+      _sortingColumnDefaultNullValue = _pinotTableSchema.getFieldSpecFor(_sortingColumn).getDefaultNullValueString();
+    }
   }
 
   private void fetchResizingConfig() {
@@ -214,8 +223,8 @@ public class HadoopSegmentPreprocessingJob extends SegmentPreprocessingJob {
     Map<String, String> customConfigsMap = tableCustomConfig.getCustomConfigs();
     if (customConfigsMap != null && customConfigsMap.containsKey(InternalConfigConstants.PREPROCESSING_NUM_REDUCERS)) {
       _numOutputFiles = Integer.parseInt(customConfigsMap.get(InternalConfigConstants.PREPROCESSING_NUM_REDUCERS));
-      Preconditions.checkState(_numOutputFiles > 0, String
-          .format("The value of %s should be positive! Current value: %s",
+      Preconditions.checkState(_numOutputFiles > 0,
+          String.format("The value of %s should be positive! Current value: %s",
               InternalConfigConstants.PREPROCESSING_NUM_REDUCERS, _numOutputFiles));
     } else {
       _numOutputFiles = 0;
@@ -235,7 +244,8 @@ public class HadoopSegmentPreprocessingJob extends SegmentPreprocessingJob {
         return;
       }
       // TODO: add a in-built maximum value for this config to avoid having too many small files.
-      // E.g. if the config is set to 1 which is smaller than this in-built value, the job should be abort from generating too many small files.
+      // E.g. if the config is set to 1 which is smaller than this in-built value, the job should be abort from
+      // generating too many small files.
       Preconditions.checkArgument(maxNumRecords > 0,
           "The value of " + InternalConfigConstants.PREPROCESSING_MAX_NUM_RECORDS_PER_FILE
               + " should be positive. Current value: " + maxNumRecords);

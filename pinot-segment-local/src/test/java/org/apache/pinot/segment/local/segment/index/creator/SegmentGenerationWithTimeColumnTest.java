@@ -52,66 +52,131 @@ import org.testng.annotations.Test;
 public class SegmentGenerationWithTimeColumnTest {
   private static final String STRING_COL_NAME = "someString";
   private static final String TIME_COL_NAME = "date";
-  private static final String TIME_COL_FORMAT = "yyyyMMdd";
+  private static final String TIME_COL_FORMAT_NO_ZONE = "yyyyMMdd";
+  private static final String TIME_COL_FORMAT_WITH_ZONE = "yyyyMMddZ";
   private static final String SEGMENT_DIR_NAME =
       System.getProperty("java.io.tmpdir") + File.separator + "segmentGenTest";
   private static final String SEGMENT_NAME = "testSegment";
   private static final int NUM_ROWS = 10000;
 
-  private long seed = System.nanoTime();
-  private Random _random = new Random(seed);
+  private long _seed = System.nanoTime();
+  private Random _random = new Random(_seed);
 
-  private long validMinTime = TimeUtils.getValidMinTimeMillis();
-  private long validMaxTime = TimeUtils.getValidMaxTimeMillis();
-  private long minTime;
-  private long maxTime;
-  private long startTime = System.currentTimeMillis();
+  private long _validMinTime = TimeUtils.getValidMinTimeMillis();
+  private long _validMaxTime = TimeUtils.getValidMaxTimeMillis();
+  private long _minTime;
+  private long _maxTime;
+  private long _startTime = System.currentTimeMillis();
   private TableConfig _tableConfig;
 
   @BeforeClass
   public void setup() {
     _tableConfig = createTableConfig();
-    System.out.println("Seed is: " + seed);
+    System.out.println("Seed is: " + _seed);
   }
 
   @BeforeMethod
   public void reset() {
-    minTime = Long.MAX_VALUE;
-    maxTime = Long.MIN_VALUE;
+    _minTime = Long.MAX_VALUE;
+    _maxTime = Long.MIN_VALUE;
     FileUtils.deleteQuietly(new File(SEGMENT_DIR_NAME));
+    // allow tests to fix the seed by restoring it here
+    _random.setSeed(_seed);
   }
 
   @Test
-  public void testSimpleDateSegmentGeneration()
+  public void testSimpleDateSegmentGenerationNoTimeZone()
       throws Exception {
-    Schema schema = createSchema(true);
-    File segmentDir = buildSegment(_tableConfig, schema, true, false);
+    // Require no time zone in time format and time values don't have time zone.
+    Schema schema = createSchema(true, TIME_COL_FORMAT_NO_ZONE);
+    File segmentDir = buildSegment(_tableConfig, schema, true, false, "");
     SegmentMetadataImpl metadata = new SegmentMetadataImpl(segmentDir);
-    Assert.assertEquals(metadata.getStartTime(), sdfToMillis(minTime));
-    Assert.assertEquals(metadata.getEndTime(), sdfToMillis(maxTime));
+    Assert.assertEquals(metadata.getStartTime(), sdfToMillisNoTimeZone(_minTime + ""));
+    Assert.assertEquals(metadata.getEndTime(), sdfToMillisNoTimeZone(_maxTime + ""));
+  }
+
+  @Test
+  public void testSimpleDateSegmentGenerationWithTimeZoneUTC()
+      throws Exception {
+    // Require time zone in time format and time values have 'Z' suffix, i.e. UTC time zone.
+    Schema schema = createSchema(true, TIME_COL_FORMAT_WITH_ZONE);
+    File segmentDir = buildSegment(_tableConfig, schema, true, false, "Z");
+    SegmentMetadataImpl metadata = new SegmentMetadataImpl(segmentDir);
+    Assert.assertEquals(metadata.getStartTime(), sdfToMillisWithTimeZone(_minTime + "Z"));
+    Assert.assertEquals(metadata.getEndTime(), sdfToMillisWithTimeZone(_maxTime + "Z"));
+  }
+
+  @Test
+  public void testSimpleDateSegmentGenerationWithTimeZoneEST()
+      throws Exception {
+    // Require time zone in time format and time values have '-05:00' suffix, i.e. EST time zone.
+    Schema schema = createSchema(true, TIME_COL_FORMAT_WITH_ZONE);
+    String timeZoneSuffix = "-05:00";
+    File segmentDir = buildSegment(_tableConfig, schema, true, false, timeZoneSuffix);
+    SegmentMetadataImpl metadata = new SegmentMetadataImpl(segmentDir);
+    Assert.assertEquals(metadata.getStartTime(), sdfToMillisWithTimeZone(_minTime + timeZoneSuffix));
+    Assert.assertEquals(metadata.getEndTime(), sdfToMillisWithTimeZone(_maxTime + timeZoneSuffix));
   }
 
   /**
    * Tests using DateTimeFieldSpec as time column
    */
   @Test
-  public void testSimpleDateSegmentGenerationNew()
+  public void testSimpleDateSegmentGenerationNewNoTimeZone()
       throws Exception {
-    Schema schema = createDateTimeFieldSpecSchema(true);
-    File segmentDir = buildSegment(_tableConfig, schema, true, false);
+    // Require no time zone in time format and time values don't have time zone.
+    Schema schema = createDateTimeFieldSpecSchema(true, TIME_COL_FORMAT_NO_ZONE);
+    File segmentDir = buildSegment(_tableConfig, schema, true, false, "");
     SegmentMetadataImpl metadata = new SegmentMetadataImpl(segmentDir);
-    Assert.assertEquals(metadata.getStartTime(), sdfToMillis(minTime));
-    Assert.assertEquals(metadata.getEndTime(), sdfToMillis(maxTime));
+    Assert.assertEquals(metadata.getStartTime(), sdfToMillisNoTimeZone(_minTime + ""));
+    Assert.assertEquals(metadata.getEndTime(), sdfToMillisNoTimeZone(_maxTime + ""));
+  }
+
+  @Test
+  public void testSimpleDateSegmentGenerationNewWithTimeZoneUTC()
+      throws Exception {
+    // Require time zone in time format and time values have 'Z' suffix, i.e. UTC time zone.
+    Schema schema = createDateTimeFieldSpecSchema(true, TIME_COL_FORMAT_WITH_ZONE);
+    File segmentDir = buildSegment(_tableConfig, schema, true, false, "Z");
+    SegmentMetadataImpl metadata = new SegmentMetadataImpl(segmentDir);
+    Assert.assertEquals(metadata.getStartTime(), sdfToMillisWithTimeZone(_minTime + "Z"));
+    Assert.assertEquals(metadata.getEndTime(), sdfToMillisWithTimeZone(_maxTime + "Z"));
+  }
+
+  @Test
+  public void testSimpleDateSegmentGenerationNewWithTimeZoneEST()
+      throws Exception {
+    // Require time zone in time format and time values have '-05:00' suffix, i.e. EST time zone.
+    Schema schema = createDateTimeFieldSpecSchema(true, TIME_COL_FORMAT_WITH_ZONE);
+    String timeZoneSuffix = "-05:00";
+    File segmentDir = buildSegment(_tableConfig, schema, true, false, timeZoneSuffix);
+    SegmentMetadataImpl metadata = new SegmentMetadataImpl(segmentDir);
+    Assert.assertEquals(metadata.getStartTime(), sdfToMillisWithTimeZone(_minTime + timeZoneSuffix));
+    Assert.assertEquals(metadata.getEndTime(), sdfToMillisWithTimeZone(_maxTime + timeZoneSuffix));
   }
 
   @Test
   public void testEpochDateSegmentGeneration()
       throws Exception {
-    Schema schema = createSchema(false);
-    File segmentDir = buildSegment(_tableConfig, schema, false, false);
+    Schema schema = createSchema(false, "");
+    File segmentDir = buildSegment(_tableConfig, schema, false, false, "");
     SegmentMetadataImpl metadata = new SegmentMetadataImpl(segmentDir);
-    Assert.assertEquals(metadata.getStartTime(), minTime);
-    Assert.assertEquals(metadata.getEndTime(), maxTime);
+    Assert.assertEquals(metadata.getStartTime(), _minTime);
+    Assert.assertEquals(metadata.getEndTime(), _maxTime);
+  }
+
+  @Test
+  public void testSimpleDateSegmentGenerationNewWithDegenerateSeed()
+      throws Exception {
+    _random.setSeed(255672780506968L);
+    testSimpleDateSegmentGenerationNewNoTimeZone();
+  }
+
+  @Test
+  public void testEpochDateSegmentGenerationWithDegenerateSeed()
+      throws Exception {
+    _random.setSeed(255672780506968L);
+    testEpochDateSegmentGeneration();
   }
 
   /**
@@ -120,18 +185,18 @@ public class SegmentGenerationWithTimeColumnTest {
   @Test
   public void testEpochDateSegmentGenerationNew()
       throws Exception {
-    Schema schema = createDateTimeFieldSpecSchema(false);
-    File segmentDir = buildSegment(_tableConfig, schema, false, false);
+    Schema schema = createDateTimeFieldSpecSchema(false, "");
+    File segmentDir = buildSegment(_tableConfig, schema, false, false, "");
     SegmentMetadataImpl metadata = new SegmentMetadataImpl(segmentDir);
-    Assert.assertEquals(metadata.getStartTime(), minTime);
-    Assert.assertEquals(metadata.getEndTime(), maxTime);
+    Assert.assertEquals(metadata.getStartTime(), _minTime);
+    Assert.assertEquals(metadata.getEndTime(), _maxTime);
   }
 
   @Test(expectedExceptions = IllegalStateException.class)
   public void testSegmentGenerationWithInvalidTime()
       throws Exception {
-    Schema schema = createSchema(false);
-    buildSegment(_tableConfig, schema, false, true);
+    Schema schema = createSchema(false, "");
+    buildSegment(_tableConfig, schema, false, true, "");
   }
 
   /**
@@ -140,28 +205,28 @@ public class SegmentGenerationWithTimeColumnTest {
   @Test(expectedExceptions = IllegalStateException.class)
   public void testSegmentGenerationWithInvalidTimeNew()
       throws Exception {
-    Schema schema = createDateTimeFieldSpecSchema(false);
-    buildSegment(_tableConfig, schema, false, true);
+    Schema schema = createDateTimeFieldSpecSchema(false, "");
+    buildSegment(_tableConfig, schema, false, true, "");
   }
 
-  private Schema createSchema(boolean isSimpleDate) {
+  private Schema createSchema(boolean isSimpleDate, String timeColFormat) {
     Schema.SchemaBuilder builder =
         new Schema.SchemaBuilder().addSingleValueDimension(STRING_COL_NAME, FieldSpec.DataType.STRING);
     if (isSimpleDate) {
-      builder.addTime(new TimeGranularitySpec(FieldSpec.DataType.INT, TimeUnit.DAYS,
-          TimeGranularitySpec.TimeFormat.SIMPLE_DATE_FORMAT.toString() + ":" + TIME_COL_FORMAT, TIME_COL_NAME), null);
+      builder.addTime(new TimeGranularitySpec(FieldSpec.DataType.STRING, TimeUnit.DAYS,
+          TimeGranularitySpec.TimeFormat.SIMPLE_DATE_FORMAT.toString() + ":" + timeColFormat, TIME_COL_NAME), null);
     } else {
       builder.addTime(new TimeGranularitySpec(FieldSpec.DataType.LONG, TimeUnit.MILLISECONDS, TIME_COL_NAME), null);
     }
     return builder.build();
   }
 
-  private Schema createDateTimeFieldSpecSchema(boolean isSimpleDate) {
+  private Schema createDateTimeFieldSpecSchema(boolean isSimpleDate, String timeColFormat) {
     Schema.SchemaBuilder builder =
         new Schema.SchemaBuilder().addSingleValueDimension(STRING_COL_NAME, FieldSpec.DataType.STRING);
     if (isSimpleDate) {
-      builder
-          .addDateTime(TIME_COL_NAME, FieldSpec.DataType.INT, "1:DAYS:SIMPLE_DATE_FORMAT:" + TIME_COL_FORMAT, "1:DAYS");
+      builder.addDateTime(TIME_COL_NAME, FieldSpec.DataType.STRING, "1:DAYS:SIMPLE_DATE_FORMAT:" + timeColFormat,
+          "1:DAYS");
     } else {
       builder.addDateTime(TIME_COL_NAME, FieldSpec.DataType.LONG, "1:MILLISECONDS:EPOCH", "1:MILLISECONDS");
     }
@@ -174,7 +239,7 @@ public class SegmentGenerationWithTimeColumnTest {
   }
 
   private File buildSegment(final TableConfig tableConfig, final Schema schema, final boolean isSimpleDate,
-      final boolean isInvalidDate)
+      final boolean isInvalidDate, String timeZoneSuffix)
       throws Exception {
     SegmentGeneratorConfig config = new SegmentGeneratorConfig(tableConfig, schema);
     config.setRawIndexCreationColumns(schema.getDimensionNames());
@@ -188,7 +253,7 @@ public class SegmentGenerationWithTimeColumnTest {
       for (FieldSpec fieldSpec : schema.getAllFieldSpecs()) {
         Object value;
 
-        value = getRandomValueForColumn(fieldSpec, isSimpleDate, isInvalidDate);
+        value = getRandomValueForColumn(fieldSpec, isSimpleDate, isInvalidDate, timeZoneSuffix);
         map.put(fieldSpec.getName(), value);
       }
 
@@ -204,16 +269,17 @@ public class SegmentGenerationWithTimeColumnTest {
     return driver.getOutputDirectory();
   }
 
-  private Object getRandomValueForColumn(FieldSpec fieldSpec, boolean isSimpleDate, boolean isInvalidDate) {
+  private Object getRandomValueForColumn(FieldSpec fieldSpec, boolean isSimpleDate, boolean isInvalidDate,
+      String timeZoneSuffix) {
     if (fieldSpec.getName().equals(TIME_COL_NAME)) {
-      return getRandomValueForTimeColumn(isSimpleDate, isInvalidDate);
+      return getRandomValueForTimeColumn(isSimpleDate, isInvalidDate, timeZoneSuffix);
     }
     return RawIndexCreatorTest.getRandomValue(_random, fieldSpec.getDataType());
   }
 
   @Test
   public void testMinAllowedValue() {
-    long millis = validMinTime; // is in UTC from epoch (19710101)
+    long millis = _validMinTime; // is in UTC from epoch (19710101)
     DateTime dateTime = new DateTime(millis, DateTimeZone.UTC);
     LocalDateTime localDateTime = dateTime.toLocalDateTime();
     int year = localDateTime.getYear();
@@ -224,13 +290,13 @@ public class SegmentGenerationWithTimeColumnTest {
     Assert.assertEquals(day, 1);
   }
 
-  private Object getRandomValueForTimeColumn(boolean isSimpleDate, boolean isInvalidDate) {
-    long randomMs = validMinTime + (long) (_random.nextDouble() * (startTime - validMinTime));
+  private Object getRandomValueForTimeColumn(boolean isSimpleDate, boolean isInvalidDate, String timeZoneSuffix) {
+    long randomMs = _validMinTime + (long) (_random.nextDouble() * (_startTime - _validMinTime));
     Preconditions.checkArgument(TimeUtils.timeValueInValidRange(randomMs), "Value " + randomMs + " out of range");
     long dateColVal = randomMs;
     Object result;
     if (isInvalidDate) {
-      result = new Long(new DateTime(2072, 1, 1, 0, 0, 0, 0, DateTimeZone.UTC).getMillis());
+      result = new DateTime(2072, 1, 1, 0, 0, 0, 0, DateTimeZone.UTC).getMillis();
       return result;
     } else if (isSimpleDate) {
       DateTime dateTime = new DateTime(randomMs, DateTimeZone.UTC);
@@ -239,24 +305,37 @@ public class SegmentGenerationWithTimeColumnTest {
       int month = localDateTime.getMonthOfYear();
       int day = localDateTime.getDayOfMonth();
       String dateColStr = String.format("%04d%02d%02d", year, month, day);
-      dateColVal = Integer.valueOf(dateColStr);
-      result = new Integer(Integer.valueOf(dateColStr));
+      dateColVal = Integer.parseInt(dateColStr);
+      result = (int) dateColVal;
     } else {
-      result = new Long(dateColVal);
+      result = dateColVal;
     }
 
-    if (dateColVal < minTime) {
-      minTime = dateColVal;
+    if (dateColVal < _minTime) {
+      _minTime = dateColVal;
     }
-    if (dateColVal > maxTime) {
-      maxTime = dateColVal;
+    if (dateColVal > _maxTime) {
+      _maxTime = dateColVal;
+    }
+    if (isSimpleDate) {
+      return result + timeZoneSuffix;
     }
     return result;
   }
 
-  private long sdfToMillis(long value) {
-    DateTimeFormatter sdfFormatter = DateTimeFormat.forPattern(TIME_COL_FORMAT);
-    DateTime dateTime = DateTime.parse(Long.toString(value), sdfFormatter);
+  private long sdfToMillisNoTimeZone(String value) {
+    // Set UTC explicitly otherwise the local time zone is used, because
+    // datetime values don't have time zone info in them.
+    DateTimeFormatter sdfFormatter = DateTimeFormat.forPattern(TIME_COL_FORMAT_NO_ZONE).withZoneUTC();
+    DateTime dateTime = DateTime.parse(value, sdfFormatter);
+    return dateTime.getMillis();
+  }
+
+  private long sdfToMillisWithTimeZone(String value) {
+    // The sdfFormatter would use the time zone info in the datetime values,
+    // so no need to specify the time zone explicitly.
+    DateTimeFormatter sdfFormatter = DateTimeFormat.forPattern(TIME_COL_FORMAT_WITH_ZONE);
+    DateTime dateTime = DateTime.parse(value, sdfFormatter);
     return dateTime.getMillis();
   }
 }

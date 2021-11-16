@@ -25,7 +25,7 @@
   <parent>
     <artifactId>pinot</artifactId>
     <groupId>org.apache.pinot</groupId>
-    <version>0.8.0-SNAPSHOT</version>
+    <version>0.9.0-SNAPSHOT</version>
     <relativePath>..</relativePath>
   </parent>
   <artifactId>pinot-tools</artifactId>
@@ -203,14 +203,15 @@
       <groupId>org.apache.pinot</groupId>
       <artifactId>pinot-yammer</artifactId>
       <version>${project.version}</version>
+      <scope>runtime</scope>
     </dependency>
     <dependency>
       <groupId>commons-cli</groupId>
       <artifactId>commons-cli</artifactId>
     </dependency>
     <dependency>
-      <groupId>args4j</groupId>
-      <artifactId>args4j</artifactId>
+      <groupId>info.picocli</groupId>
+      <artifactId>picocli</artifactId>
     </dependency>
     <dependency>
       <groupId>org.testng</groupId>
@@ -272,6 +273,7 @@
                 <initialMemorySize>4G</initialMemorySize>
                 <extraArguments>
                   <extraArgument>-Dlog4j2.configurationFile=conf/log4j2.xml</extraArgument>
+                  <extraArgument>-Dpinot.admin.system.exit=true</extraArgument>
                 </extraArguments>
               </jvmSettings>
             </program>

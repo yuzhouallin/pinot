@@ -66,7 +66,8 @@ import {
   getSchemaList,
   getState,
   getInfo,
-  authenticateUser
+  authenticateUser,
+  getSegmentDebugInfo
 } from '../requests';
 import Utils from './Utils';
 const JSONbig = require('json-bigint')({'storeAsString': true})
@@ -462,12 +463,34 @@ const getSegmentList = (tableName) => {
       records: Object.keys(idealStateObj).map((key) => {
         return [
           key,
-          _.isEqual(idealStateObj[key], externalViewObj[key]) ? 'Good' : 'Bad',
+          getSegmentStatus(idealStateObj[key], externalViewObj[key])
         ];
       }),
       externalViewObj
     };
   });
+};
+
+const getSegmentStatus = (idealSegment, externalViewSegment) => {
+  if(_.isEqual(idealSegment, externalViewSegment)){
+    return 'Good';
+  }
+  let goodCount = 0;
+  const totalCount = Object.keys(externalViewSegment).length;
+  Object.keys(idealSegment).map((replicaName)=>{
+    const idealReplicaState = idealSegment[replicaName];
+    const externalReplicaState = externalViewSegment[replicaName];
+    if(idealReplicaState === externalReplicaState || (externalReplicaState === 'CONSUMING')){
+      goodCount += 1;
+    }
+  });
+  if(goodCount === 0){
+    return 'Bad';
+  } else if(goodCount === totalCount){
+    return  'Good';
+  } else {
+    return `Partial-${goodCount}/${totalCount}`;
+  }
 };
 
 // This method is used to display JSON format of a particular tenant table
@@ -485,18 +508,34 @@ const getTableDetails = (tableName) => {
 //      /segments/:tableName/:segmentName/metadata
 // Expected Output: {columns: [], records: []}
 const getSegmentDetails = (tableName, segmentName) => {
+  const tableInfo = tableName.split('_');
   const promiseArr = [];
   promiseArr.push(getExternalView(tableName));
   promiseArr.push(getSegmentMetadata(tableName, segmentName));
+  promiseArr.push(getSegmentDebugInfo(tableInfo[0], tableInfo[1].toLowerCase()));
 
   return Promise.all(promiseArr).then((results) => {
     const obj = results[0].data.OFFLINE || results[0].data.REALTIME;
     const segmentMetaData = results[1].data;
+    const debugObj = results[2].data;
+    let debugInfoObj = {};
+
+    if(debugObj && debugObj[0]){
+      const debugInfosObj = debugObj[0].segmentDebugInfos?.find((o)=>{return o.segmentName === segmentName});
+      if(debugInfosObj){
+        const serverNames = _.keys(debugInfosObj?.serverState || {});
+        serverNames?.map((serverName)=>{
+          debugInfoObj[serverName] = debugInfosObj.serverState[serverName]?.errorInfo?.errorMessage;
+        });
+      }
+    }
+    console.log(debugInfoObj);
 
     const result = [];
     for (const prop in obj[segmentName]) {
       if (obj[segmentName]) {
-        result.push([prop, obj[segmentName][prop]]);
+        const status = obj[segmentName][prop];
+        result.push([prop, status === 'ERROR' ? {value: status, tooltip: debugInfoObj[prop]} : status]);
       }
     }
 
@@ -779,6 +818,7 @@ export default {
   getAllTableDetails,
   getTableSummaryData,
   getSegmentList,
+  getSegmentStatus,
   getTableDetails,
   getSegmentDetails,
   getClusterName,

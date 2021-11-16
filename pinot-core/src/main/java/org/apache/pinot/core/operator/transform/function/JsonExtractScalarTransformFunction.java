@@ -18,18 +18,14 @@
  */
 package org.apache.pinot.core.operator.transform.function;
 
-import com.google.common.collect.ImmutableSet;
 import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.Option;
 import com.jayway.jsonpath.ParseContext;
 import com.jayway.jsonpath.spi.json.JacksonJsonProvider;
-import com.jayway.jsonpath.spi.json.JsonProvider;
 import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
-import com.jayway.jsonpath.spi.mapper.MappingProvider;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.apache.pinot.core.operator.blocks.ProjectionBlock;
 import org.apache.pinot.core.operator.transform.TransformResultMetadata;
 import org.apache.pinot.core.plan.DocIdSetPlanNode;
@@ -54,11 +50,14 @@ import org.apache.pinot.spi.utils.JsonUtils;
  */
 public class JsonExtractScalarTransformFunction extends BaseTransformFunction {
   public static final String FUNCTION_NAME = "jsonExtractScalar";
-  private static final ParseContext JSON_PARSER_CONTEXT =
-      JsonPath.using(Configuration.defaultConfiguration().addOptions(Option.SUPPRESS_EXCEPTIONS));
+
+  private static final ParseContext JSON_PARSER_CONTEXT = JsonPath.using(
+      new Configuration.ConfigurationBuilder().jsonProvider(new JacksonJsonProvider())
+          .mappingProvider(new JacksonMappingProvider()).options(Option.SUPPRESS_EXCEPTIONS).build());
 
   private TransformFunction _jsonFieldTransformFunction;
-  private String _jsonPath;
+  private String _jsonPathString;
+  private JsonPath _jsonPath;
   private Object _defaultValue = null;
   private TransformResultMetadata _resultMetadata;
 
@@ -72,16 +71,19 @@ public class JsonExtractScalarTransformFunction extends BaseTransformFunction {
     // Check that there are exactly 3 or 4 arguments
     if (arguments.size() < 3 || arguments.size() > 4) {
       throw new IllegalArgumentException(
-          "Expected 3/4 arguments for transform function: jsonExtractScalar(jsonFieldName, 'jsonPath', 'resultsType', ['defaultValue'])");
+          "Expected 3/4 arguments for transform function: jsonExtractScalar(jsonFieldName, 'jsonPath', 'resultsType',"
+              + " ['defaultValue'])");
     }
 
     TransformFunction firstArgument = arguments.get(0);
     if (firstArgument instanceof LiteralTransformFunction || !firstArgument.getResultMetadata().isSingleValue()) {
       throw new IllegalArgumentException(
-          "The first argument of jsonExtractScalar transform function must be a single-valued column or a transform function");
+          "The first argument of jsonExtractScalar transform function must be a single-valued column or a transform "
+              + "function");
     }
     _jsonFieldTransformFunction = firstArgument;
-    _jsonPath = ((LiteralTransformFunction) arguments.get(1)).getLiteral();
+    _jsonPathString = ((LiteralTransformFunction) arguments.get(1)).getLiteral();
+    _jsonPath = JsonPath.compile(_jsonPathString);
     String resultsType = ((LiteralTransformFunction) arguments.get(2)).getLiteral().toUpperCase();
     boolean isSingleValue = !resultsType.endsWith("_ARRAY");
     try {
@@ -93,8 +95,9 @@ public class JsonExtractScalarTransformFunction extends BaseTransformFunction {
       _resultMetadata = new TransformResultMetadata(dataType, isSingleValue, false);
     } catch (Exception e) {
       throw new IllegalStateException(String.format(
-          "Unsupported results type: %s for jsonExtractScalar function. Supported types are: INT/LONG/FLOAT/DOUBLE/BOOLEAN/TIMESTAMP/STRING/INT_ARRAY/LONG_ARRAY/FLOAT_ARRAY/DOUBLE_ARRAY/STRING_ARRAY",
-          resultsType));
+          "Unsupported results type: %s for jsonExtractScalar function. Supported types are: "
+              + "INT/LONG/FLOAT/DOUBLE/BOOLEAN/TIMESTAMP/STRING/INT_ARRAY/LONG_ARRAY/FLOAT_ARRAY/DOUBLE_ARRAY"
+              + "/STRING_ARRAY", resultsType));
     }
   }
 
@@ -123,7 +126,7 @@ public class JsonExtractScalarTransformFunction extends BaseTransformFunction {
           continue;
         }
         throw new RuntimeException(
-            String.format("Illegal Json Path: [%s], when reading [%s]", _jsonPath, jsonStrings[i]));
+            String.format("Illegal Json Path: [%s], when reading [%s]", _jsonPathString, jsonStrings[i]));
       }
       if (result instanceof Number) {
         _intValuesSV[i] = ((Number) result).intValue();
@@ -154,7 +157,7 @@ public class JsonExtractScalarTransformFunction extends BaseTransformFunction {
           continue;
         }
         throw new RuntimeException(
-            String.format("Illegal Json Path: [%s], when reading [%s]", _jsonPath, jsonStrings[i]));
+            String.format("Illegal Json Path: [%s], when reading [%s]", _jsonPathString, jsonStrings[i]));
       }
       if (result instanceof Number) {
         _longValuesSV[i] = ((Number) result).longValue();
@@ -186,7 +189,7 @@ public class JsonExtractScalarTransformFunction extends BaseTransformFunction {
           continue;
         }
         throw new RuntimeException(
-            String.format("Illegal Json Path: [%s], when reading [%s]", _jsonPath, jsonStrings[i]));
+            String.format("Illegal Json Path: [%s], when reading [%s]", _jsonPathString, jsonStrings[i]));
       }
       if (result instanceof Number) {
         _floatValuesSV[i] = ((Number) result).floatValue();
@@ -217,7 +220,7 @@ public class JsonExtractScalarTransformFunction extends BaseTransformFunction {
           continue;
         }
         throw new RuntimeException(
-            String.format("Illegal Json Path: [%s], when reading [%s]", _jsonPath, jsonStrings[i]));
+            String.format("Illegal Json Path: [%s], when reading [%s]", _jsonPathString, jsonStrings[i]));
       }
       if (result instanceof Number) {
         _doubleValuesSV[i] = ((Number) result).doubleValue();
@@ -248,7 +251,7 @@ public class JsonExtractScalarTransformFunction extends BaseTransformFunction {
           continue;
         }
         throw new RuntimeException(
-            String.format("Illegal Json Path: [%s], when reading [%s]", _jsonPath, jsonStrings[i]));
+            String.format("Illegal Json Path: [%s], when reading [%s]", _jsonPathString, jsonStrings[i]));
       }
       if (result instanceof String) {
         _stringValuesSV[i] = (String) result;
@@ -397,28 +400,5 @@ public class JsonExtractScalarTransformFunction extends BaseTransformFunction {
       _stringValuesMV[i] = values;
     }
     return _stringValuesMV;
-  }
-
-  static {
-    Configuration.setDefaults(new Configuration.Defaults() {
-
-      private final JsonProvider jsonProvider = new JacksonJsonProvider();
-      private final MappingProvider mappingProvider = new JacksonMappingProvider();
-
-      @Override
-      public JsonProvider jsonProvider() {
-        return jsonProvider;
-      }
-
-      @Override
-      public MappingProvider mappingProvider() {
-        return mappingProvider;
-      }
-
-      @Override
-      public Set<Option> options() {
-        return ImmutableSet.of(Option.SUPPRESS_EXCEPTIONS);
-      }
-    });
   }
 }

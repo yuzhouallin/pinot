@@ -49,6 +49,8 @@ import org.apache.http.client.methods.HttpPost;
 import org.apache.http.client.methods.HttpPut;
 import org.apache.http.client.methods.HttpUriRequest;
 import org.apache.http.client.methods.RequestBuilder;
+import org.apache.http.conn.ssl.NoopHostnameVerifier;
+import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
 import org.apache.http.entity.ContentType;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.entity.mime.HttpMultipartMode;
@@ -60,6 +62,7 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.message.BasicHeader;
 import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.ssl.SSLContexts;
 import org.apache.http.util.EntityUtils;
 import org.apache.pinot.common.exception.HttpErrorStatusException;
 import org.apache.pinot.common.restlet.resources.StartReplaceSegmentsRequest;
@@ -68,6 +71,8 @@ import org.apache.pinot.spi.utils.CommonConstants;
 import org.apache.pinot.spi.utils.JsonUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 
 /**
@@ -85,6 +90,7 @@ public class FileUploadDownloadClient implements Closeable {
 
   public static class CustomHeaders {
     public static final String UPLOAD_TYPE = "UPLOAD_TYPE";
+    public static final String REFRESH_ONLY = "REFRESH_ONLY";
     public static final String DOWNLOAD_URI = "DOWNLOAD_URI";
     public static final String SEGMENT_ZK_METADATA_CUSTOM_MAP_MODIFIER = "Pinot-SegmentZKMetadataCustomMapModifier";
     public static final String CRYPTER = "CRYPTER";
@@ -138,12 +144,14 @@ public class FileUploadDownloadClient implements Closeable {
    */
   public FileUploadDownloadClient(@Nullable SSLContext sslContext) {
     if (sslContext == null) {
-      sslContext = _defaultSSLContext;
+      sslContext = _defaultSSLContext != null ? _defaultSSLContext : SSLContexts.createDefault();
     }
-    _httpClient = HttpClients.custom().setSSLContext(sslContext).build();
+    // Set NoopHostnameVerifier to skip validating hostname when uploading/downloading segments.
+    SSLConnectionSocketFactory csf = new SSLConnectionSocketFactory(sslContext, NoopHostnameVerifier.INSTANCE);
+    _httpClient = HttpClients.custom().setSSLSocketFactory(csf).build();
   }
 
-  private static URI getURI(String protocol, String host, int port, String path)
+  public static URI getURI(String protocol, String host, int port, String path)
       throws URISyntaxException {
     if (!SUPPORTED_PROTOCOLS.contains(protocol)) {
       throw new IllegalArgumentException(String.format("Unsupported protocol '%s'", protocol));
@@ -151,7 +159,7 @@ public class FileUploadDownloadClient implements Closeable {
     return new URI(protocol, null, host, port, path, null, null);
   }
 
-  private static URI getURI(String protocol, String host, int port, String path, String query)
+  public static URI getURI(String protocol, String host, int port, String path, String query)
       throws URISyntaxException {
     if (!SUPPORTED_PROTOCOLS.contains(protocol)) {
       throw new IllegalArgumentException(String.format("Unsupported protocol '%s'", protocol));
@@ -323,7 +331,6 @@ public class FileUploadDownloadClient implements Closeable {
         TYPE_DELIMITER + tableType + SEGMENT_LINEAGE_ENTRY_ID_PARAMETER + segmentLineageEntryId);
   }
 
-
   private static HttpUriRequest getUploadFileRequest(String method, URI uri, ContentBody contentBody,
       @Nullable List<Header> headers, @Nullable List<NameValuePair> parameters, int socketTimeoutMs) {
     // Build the Http entity
@@ -414,9 +421,9 @@ public class FileUploadDownloadClient implements Closeable {
   }
 
   private static HttpUriRequest getStartReplaceSegmentsRequest(URI uri, String jsonRequestBody, int socketTimeoutMs) {
-    RequestBuilder requestBuilder = RequestBuilder.post(uri).setVersion(HttpVersion.HTTP_1_1)
-        .setHeader(HttpHeaders.CONTENT_TYPE, JSON_CONTENT_TYPE)
-        .setEntity(new StringEntity(jsonRequestBody, ContentType.APPLICATION_JSON));
+    RequestBuilder requestBuilder =
+        RequestBuilder.post(uri).setVersion(HttpVersion.HTTP_1_1).setHeader(HttpHeaders.CONTENT_TYPE, JSON_CONTENT_TYPE)
+            .setEntity(new StringEntity(jsonRequestBody, ContentType.APPLICATION_JSON));
     setTimeout(requestBuilder, socketTimeoutMs);
     return requestBuilder.build();
   }
@@ -436,17 +443,23 @@ public class FileUploadDownloadClient implements Closeable {
     return requestBuilder.build();
   }
 
-  private static HttpUriRequest getDownloadFileRequest(URI uri, int socketTimeoutMs, String authToken) {
+  private static HttpUriRequest getDownloadFileRequest(URI uri, int socketTimeoutMs, String authToken,
+      List<Header> httpHeaders) {
     RequestBuilder requestBuilder = RequestBuilder.get(uri).setVersion(HttpVersion.HTTP_1_1);
     if (StringUtils.isNotBlank(authToken)) {
-      requestBuilder.addHeader("Authorization", authToken);
+      requestBuilder.addHeader(HttpHeaders.AUTHORIZATION, authToken);
     }
     setTimeout(requestBuilder, socketTimeoutMs);
     String userInfo = uri.getUserInfo();
     if (userInfo != null) {
-      String encoded = Base64.encodeBase64String(StringUtil.encodeUtf8(userInfo));
+      String encoded = Base64.encodeBase64String(userInfo.getBytes(UTF_8));
       String authHeader = "Basic " + encoded;
       requestBuilder.addHeader(HttpHeaders.AUTHORIZATION, authHeader);
+    }
+    if (httpHeaders != null && !httpHeaders.isEmpty()) {
+      for (Header header : httpHeaders) {
+        requestBuilder.addHeader(header);
+      }
     }
     return requestBuilder.build();
   }
@@ -510,7 +523,7 @@ public class FileUploadDownloadClient implements Closeable {
     StatusLine statusLine = response.getStatusLine();
     String reason;
     try {
-      reason = JsonUtils.stringToJsonNode(EntityUtils.toString(response.getEntity())).get("error").asText();
+      reason = JsonUtils.stringToJsonNode(EntityUtils.toString(response.getEntity())).get("_error").asText();
     } catch (Exception e) {
       reason = "Failed to get reason";
     }
@@ -536,10 +549,12 @@ public class FileUploadDownloadClient implements Closeable {
     return sendRequest(requestBuilder.build());
   }
 
-  public SimpleHttpResponse sendGetRequest(URI uri, String authToken)
+  public SimpleHttpResponse sendGetRequest(URI uri, @Nullable String authToken)
       throws IOException, HttpErrorStatusException {
     RequestBuilder requestBuilder = RequestBuilder.get(uri).setVersion(HttpVersion.HTTP_1_1);
-    requestBuilder.addHeader("Authorization", authToken);
+    if (StringUtils.isNotBlank(authToken)) {
+      requestBuilder.addHeader("Authorization", authToken);
+    }
     setTimeout(requestBuilder, GET_REQUEST_SOCKET_TIMEOUT_MS);
     return sendRequest(requestBuilder.build());
   }
@@ -557,11 +572,27 @@ public class FileUploadDownloadClient implements Closeable {
     return sendRequest(requestBuilder.build());
   }
 
-  public SimpleHttpResponse sendDeleteRequest(URI uri, String authToken)
+  public SimpleHttpResponse sendDeleteRequest(URI uri, @Nullable String authToken)
       throws IOException, HttpErrorStatusException {
     RequestBuilder requestBuilder = RequestBuilder.delete(uri).setVersion(HttpVersion.HTTP_1_1);
-    requestBuilder.addHeader("Authorization", authToken);
+    if (StringUtils.isNotBlank(authToken)) {
+      requestBuilder.addHeader("Authorization", authToken);
+    }
     setTimeout(requestBuilder, DELETE_REQUEST_SOCKET_TIMEOUT_MS);
+    return sendRequest(requestBuilder.build());
+  }
+
+  public SimpleHttpResponse postJsonRequest(URI uri, @Nullable String jsonRequestBody, @Nullable String authToken)
+      throws HttpErrorStatusException, IOException {
+    RequestBuilder requestBuilder = RequestBuilder.post(uri).setVersion(HttpVersion.HTTP_1_1)
+        .setHeader(HttpHeaders.CONTENT_TYPE, JSON_CONTENT_TYPE);
+    if (jsonRequestBody != null) {
+      requestBuilder.setEntity(new StringEntity(jsonRequestBody, ContentType.APPLICATION_JSON));
+    }
+    if (StringUtils.isNotBlank(authToken)) {
+      requestBuilder.addHeader("Authorization", authToken);
+    }
+    setTimeout(requestBuilder, DEFAULT_SOCKET_TIMEOUT_MS);
     return sendRequest(requestBuilder.build());
   }
 
@@ -798,6 +829,33 @@ public class FileUploadDownloadClient implements Closeable {
   }
 
   /**
+   * Used by controllers to send requests to servers:
+   * Controller periodic task uses this endpoint to ask servers
+   * to upload committed llc segment to segment store if missing.
+   * @param uri The uri to ask servers to upload segment to segment store
+   * @return the uploaded segment download url from segment store
+   * @throws URISyntaxException
+   * @throws IOException
+   * @throws HttpErrorStatusException
+   *
+   * TODO: migrate this method to another class
+   */
+  public String uploadToSegmentStore(String uri)
+      throws URISyntaxException, IOException, HttpErrorStatusException {
+    RequestBuilder requestBuilder = RequestBuilder.post(new URI(uri)).setVersion(HttpVersion.HTTP_1_1);
+    setTimeout(requestBuilder, DEFAULT_SOCKET_TIMEOUT_MS);
+    // sendRequest checks the response status code
+    SimpleHttpResponse response = sendRequest(requestBuilder.build());
+    String downloadUrl = response.getResponse();
+    if (downloadUrl.isEmpty()) {
+      throw new HttpErrorStatusException(String
+          .format("Returned segment download url is empty after requesting servers to upload by the path: %s", uri),
+          response.getStatusCode());
+    }
+    return downloadUrl;
+  }
+
+  /**
    * Send segment uri.
    *
    * Note: table name has to be set as a parameter.
@@ -888,20 +946,22 @@ public class FileUploadDownloadClient implements Closeable {
    */
   public SimpleHttpResponse startReplaceSegments(URI uri, StartReplaceSegmentsRequest startReplaceSegmentsRequest)
       throws IOException, HttpErrorStatusException {
-    return sendRequest(
-        getStartReplaceSegmentsRequest(uri, JsonUtils.objectToString(startReplaceSegmentsRequest), DEFAULT_SOCKET_TIMEOUT_MS));
+    return sendRequest(getStartReplaceSegmentsRequest(uri, JsonUtils.objectToString(startReplaceSegmentsRequest),
+        DEFAULT_SOCKET_TIMEOUT_MS));
   }
 
   /**
    * End replace segments with default settings.
    *
    * @param uri URI
+   * @oaram socketTimeoutMs Socket timeout in milliseconds
    * @return Response
    * @throws IOException
    * @throws HttpErrorStatusException
    */
-  public SimpleHttpResponse endReplaceSegments(URI uri) throws IOException, HttpErrorStatusException {
-    return sendRequest(getEndReplaceSegmentsRequest(uri, DEFAULT_SOCKET_TIMEOUT_MS));
+  public SimpleHttpResponse endReplaceSegments(URI uri, int socketTimeoutMs)
+      throws IOException, HttpErrorStatusException {
+    return sendRequest(getEndReplaceSegmentsRequest(uri, socketTimeoutMs));
   }
 
   /**
@@ -945,7 +1005,7 @@ public class FileUploadDownloadClient implements Closeable {
    *
    * Download a file using default settings, with an optional auth token
    *
-   * @see FileUploadDownloadClient#downloadFile(URI, int, File, String)
+   * @see FileUploadDownloadClient#downloadFile(URI, int, File, String, List)
    *
    * @param uri URI
    * @param socketTimeoutMs Socket timeout in milliseconds
@@ -957,7 +1017,7 @@ public class FileUploadDownloadClient implements Closeable {
   @Deprecated
   public int downloadFile(URI uri, int socketTimeoutMs, File dest)
       throws IOException, HttpErrorStatusException {
-    return downloadFile(uri, socketTimeoutMs, dest, null);
+    return downloadFile(uri, socketTimeoutMs, dest, null, null);
   }
 
   /**
@@ -967,13 +1027,14 @@ public class FileUploadDownloadClient implements Closeable {
    * @param socketTimeoutMs Socket timeout in milliseconds
    * @param dest File destination
    * @param authToken auth token
+   * @param httpHeaders http headers
    * @return Response status code
    * @throws IOException
    * @throws HttpErrorStatusException
    */
-  public int downloadFile(URI uri, int socketTimeoutMs, File dest, String authToken)
+  public int downloadFile(URI uri, int socketTimeoutMs, File dest, String authToken, List<Header> httpHeaders)
       throws IOException, HttpErrorStatusException {
-    HttpUriRequest request = getDownloadFileRequest(uri, socketTimeoutMs, authToken);
+    HttpUriRequest request = getDownloadFileRequest(uri, socketTimeoutMs, authToken, httpHeaders);
     try (CloseableHttpResponse response = _httpClient.execute(request)) {
       StatusLine statusLine = response.getStatusLine();
       int statusCode = statusLine.getStatusCode();
@@ -1031,7 +1092,23 @@ public class FileUploadDownloadClient implements Closeable {
    */
   public int downloadFile(URI uri, File dest, String authToken)
       throws IOException, HttpErrorStatusException {
-    return downloadFile(uri, DEFAULT_SOCKET_TIMEOUT_MS, dest, authToken);
+    return downloadFile(uri, DEFAULT_SOCKET_TIMEOUT_MS, dest, null, null);
+  }
+
+  /**
+   * Download a file.
+   *
+   * @param uri URI
+   * @param dest File destination
+   * @param authToken auth token
+   * @param httpHeaders http headers
+   * @return Response status code
+   * @throws IOException
+   * @throws HttpErrorStatusException
+   */
+  public int downloadFile(URI uri, File dest, String authToken, List<Header> httpHeaders)
+      throws IOException, HttpErrorStatusException {
+    return downloadFile(uri, DEFAULT_SOCKET_TIMEOUT_MS, dest, authToken, httpHeaders);
   }
 
   @Override

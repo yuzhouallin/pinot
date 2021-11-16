@@ -22,8 +22,12 @@ import com.google.common.base.Preconditions;
 import java.io.File;
 import java.io.IOException;
 import java.util.Map;
+import org.apache.pinot.segment.local.io.writer.impl.VarByteChunkSVForwardIndexWriterV4;
+import org.apache.pinot.segment.local.segment.creator.impl.inv.BitSlicedRangeIndexCreator;
+import org.apache.pinot.segment.local.segment.creator.impl.inv.RangeIndexCreator;
 import org.apache.pinot.segment.local.segment.index.loader.IndexLoadingConfig;
 import org.apache.pinot.segment.local.segment.index.readers.BaseImmutableDictionary;
+import org.apache.pinot.segment.local.segment.index.readers.BitSlicedRangeIndexReader;
 import org.apache.pinot.segment.local.segment.index.readers.BitmapInvertedIndexReader;
 import org.apache.pinot.segment.local.segment.index.readers.BytesDictionary;
 import org.apache.pinot.segment.local.segment.index.readers.DoubleDictionary;
@@ -37,17 +41,22 @@ import org.apache.pinot.segment.local.segment.index.readers.OnHeapFloatDictionar
 import org.apache.pinot.segment.local.segment.index.readers.OnHeapIntDictionary;
 import org.apache.pinot.segment.local.segment.index.readers.OnHeapLongDictionary;
 import org.apache.pinot.segment.local.segment.index.readers.OnHeapStringDictionary;
-import org.apache.pinot.segment.local.segment.index.readers.RangeIndexReader;
+import org.apache.pinot.segment.local.segment.index.readers.RangeIndexReaderImpl;
 import org.apache.pinot.segment.local.segment.index.readers.StringDictionary;
 import org.apache.pinot.segment.local.segment.index.readers.bloom.BloomFilterReaderFactory;
 import org.apache.pinot.segment.local.segment.index.readers.forward.FixedBitMVForwardIndexReader;
 import org.apache.pinot.segment.local.segment.index.readers.forward.FixedBitSVForwardIndexReaderV2;
+import org.apache.pinot.segment.local.segment.index.readers.forward.FixedByteChunkMVForwardIndexReader;
 import org.apache.pinot.segment.local.segment.index.readers.forward.FixedByteChunkSVForwardIndexReader;
+import org.apache.pinot.segment.local.segment.index.readers.forward.VarByteChunkMVForwardIndexReader;
 import org.apache.pinot.segment.local.segment.index.readers.forward.VarByteChunkSVForwardIndexReader;
+import org.apache.pinot.segment.local.segment.index.readers.forward.VarByteChunkSVForwardIndexReaderV4;
 import org.apache.pinot.segment.local.segment.index.readers.geospatial.ImmutableH3IndexReader;
 import org.apache.pinot.segment.local.segment.index.readers.json.ImmutableJsonIndexReader;
 import org.apache.pinot.segment.local.segment.index.readers.sorted.SortedIndexReaderImpl;
 import org.apache.pinot.segment.local.segment.index.readers.text.LuceneTextIndexReader;
+import org.apache.pinot.segment.local.utils.nativefst.FSTHeader;
+import org.apache.pinot.segment.local.utils.nativefst.NativeFSTIndexReader;
 import org.apache.pinot.segment.spi.ColumnMetadata;
 import org.apache.pinot.segment.spi.index.column.ColumnIndexContainer;
 import org.apache.pinot.segment.spi.index.reader.BloomFilterReader;
@@ -56,6 +65,7 @@ import org.apache.pinot.segment.spi.index.reader.H3IndexReader;
 import org.apache.pinot.segment.spi.index.reader.InvertedIndexReader;
 import org.apache.pinot.segment.spi.index.reader.JsonIndexReader;
 import org.apache.pinot.segment.spi.index.reader.NullValueVectorReader;
+import org.apache.pinot.segment.spi.index.reader.RangeIndexReader;
 import org.apache.pinot.segment.spi.index.reader.SortedIndexReader;
 import org.apache.pinot.segment.spi.index.reader.TextIndexReader;
 import org.apache.pinot.segment.spi.memory.PinotDataBuffer;
@@ -73,7 +83,7 @@ public final class PhysicalColumnIndexContainer implements ColumnIndexContainer 
 
   private final ForwardIndexReader<?> _forwardIndex;
   private final InvertedIndexReader<?> _invertedIndex;
-  private final InvertedIndexReader<?> _rangeIndex;
+  private final RangeIndexReader<?> _rangeIndex;
   private final TextIndexReader _textIndex;
   private final TextIndexReader _fstIndex;
   private final JsonIndexReader _jsonIndex;
@@ -168,19 +178,35 @@ public final class PhysicalColumnIndexContainer implements ColumnIndexContainer 
       }
 
       if (loadFSTIndex) {
-        _fstIndex = new LuceneFSTIndexReader(segmentReader.getIndexFor(columnName, ColumnIndexType.FST_INDEX));
+        PinotDataBuffer buffer = segmentReader.getIndexFor(columnName, ColumnIndexType.FST_INDEX);
+        int magicHeader = buffer.getInt(0);
+        if (magicHeader == FSTHeader.FST_MAGIC) {
+          _fstIndex = new NativeFSTIndexReader(buffer);
+        } else {
+          _fstIndex = new LuceneFSTIndexReader(buffer);
+        }
       } else {
         _fstIndex = null;
       }
 
       if (loadRangeIndex) {
-        _rangeIndex = new RangeIndexReader(segmentReader.getIndexFor(columnName, ColumnIndexType.RANGE_INDEX));
+        PinotDataBuffer buffer = segmentReader.getIndexFor(columnName, ColumnIndexType.RANGE_INDEX);
+        int version = buffer.getInt(0);
+        if (version == RangeIndexCreator.VERSION) {
+          _rangeIndex = new RangeIndexReaderImpl(buffer);
+        } else if (version == BitSlicedRangeIndexCreator.VERSION) {
+          _rangeIndex = new BitSlicedRangeIndexReader(buffer, metadata);
+        } else {
+          LOGGER.warn("Unknown range index version: {}, skip loading range index for column: {}", version,
+              metadata.getColumnName());
+          _rangeIndex = null;
+        }
       } else {
         _rangeIndex = null;
       }
     } else {
       // Raw index
-      _forwardIndex = loadRawForwardIndex(fwdIndexBuffer, metadata.getDataType());
+      _forwardIndex = loadRawForwardIndex(fwdIndexBuffer, metadata.getDataType(), metadata.isSingleValue());
       _dictionary = null;
       _rangeIndex = null;
       _invertedIndex = null;
@@ -199,7 +225,7 @@ public final class PhysicalColumnIndexContainer implements ColumnIndexContainer 
   }
 
   @Override
-  public InvertedIndexReader<?> getRangeIndex() {
+  public RangeIndexReader<?> getRangeIndex() {
     return _rangeIndex;
   }
 
@@ -280,17 +306,25 @@ public final class PhysicalColumnIndexContainer implements ColumnIndexContainer 
     }
   }
 
-  private static ForwardIndexReader<?> loadRawForwardIndex(PinotDataBuffer forwardIndexBuffer, DataType dataType) {
+  private static ForwardIndexReader<?> loadRawForwardIndex(PinotDataBuffer forwardIndexBuffer, DataType dataType,
+      boolean isSingleValue) {
     DataType storedType = dataType.getStoredType();
     switch (storedType) {
       case INT:
       case LONG:
       case FLOAT:
       case DOUBLE:
-        return new FixedByteChunkSVForwardIndexReader(forwardIndexBuffer, storedType);
+        return isSingleValue ? new FixedByteChunkSVForwardIndexReader(forwardIndexBuffer, storedType)
+            : new FixedByteChunkMVForwardIndexReader(forwardIndexBuffer, storedType);
       case STRING:
       case BYTES:
-        return new VarByteChunkSVForwardIndexReader(forwardIndexBuffer, storedType);
+        if (isSingleValue) {
+          int version = forwardIndexBuffer.getInt(0);
+          return version < VarByteChunkSVForwardIndexWriterV4.VERSION
+              ? new VarByteChunkSVForwardIndexReader(forwardIndexBuffer, storedType)
+              : new VarByteChunkSVForwardIndexReaderV4(forwardIndexBuffer, storedType);
+        }
+        return new VarByteChunkMVForwardIndexReader(forwardIndexBuffer, storedType);
       default:
         throw new IllegalStateException("Illegal data type for raw forward index: " + dataType);
     }

@@ -24,6 +24,7 @@ import java.io.File;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import org.apache.commons.io.FileUtils;
 import org.apache.pinot.tools.admin.PinotAdministrator;
@@ -34,6 +35,11 @@ import static org.apache.pinot.tools.Quickstart.printStatus;
 
 
 public class JoinQuickStart extends QuickStartBase {
+
+  @Override
+  public List<String> types() {
+    return Collections.singletonList("JOIN");
+  }
 
   public void execute()
       throws Exception {
@@ -75,8 +81,7 @@ public class JoinQuickStart extends QuickStartBase {
 
     File tempDir = new File(quickstartTmpDir, "tmp");
     FileUtils.forceMkdir(tempDir);
-    QuickstartRunner runner =
-        new QuickstartRunner(Lists.newArrayList(request, dimTableRequest), 1, 1, 3, tempDir);
+    QuickstartRunner runner = new QuickstartRunner(Lists.newArrayList(request, dimTableRequest), 1, 1, 3, tempDir);
 
     printStatus(Quickstart.Color.CYAN, "***** Starting Zookeeper, controller, broker and server *****");
     runner.startAll();
@@ -111,7 +116,8 @@ public class JoinQuickStart extends QuickStartBase {
     printStatus(Quickstart.Color.GREEN, "***************************************************");
 
     String q3 =
-        "select playerName, teamID, lookup('dimBaseballTeams', 'teamName', 'teamID', teamID) from baseballStats limit 10";
+        "select playerName, teamID, lookup('dimBaseballTeams', 'teamName', 'teamID', teamID) from baseballStats limit"
+            + " 10";
     printStatus(Quickstart.Color.YELLOW, "Baseball Stats with joined team names");
     printStatus(Quickstart.Color.CYAN, "Query : " + q3);
     printStatus(Quickstart.Color.YELLOW, prettyPrintResponse(runner.runQuery(q3)));

@@ -35,6 +35,10 @@ import static org.apache.pinot.tools.Quickstart.printStatus;
 
 
 public class OfflineComplexTypeHandlingQuickStart extends QuickStartBase {
+  @Override
+  public List<String> types() {
+      return Arrays.asList("OFFLINE_COMPLEX_TYPE", "OFFLINE-COMPLEX-TYPE", "BATCH_COMPLEX_TYPE", "BATCH-COMPLEX-TYPE");
+  }
 
   public void execute()
       throws Exception {
@@ -48,11 +52,13 @@ public class OfflineComplexTypeHandlingQuickStart extends QuickStartBase {
     File ingestionJobSpecFile = new File(baseDir, "ingestionJobSpec.yaml");
 
     ClassLoader classLoader = OfflineComplexTypeHandlingQuickStart.class.getClassLoader();
-    URL resource = classLoader.getResource("examples/batch/githubEvents/githubEvents_offline_complexTypeHandling_table_config.json");
+    URL resource = classLoader
+        .getResource("examples/batch/githubEvents/githubEvents_offline_complexTypeHandling_table_config.json");
     Preconditions.checkNotNull(resource);
     FileUtils.copyURLToFile(resource, tableConfigFile);
     // TODO: add all columns of the flattened fields after the schema inference
-    resource = classLoader.getResource("examples/batch/githubEvents/githubEvents_offline_complexTypeHandling_schema.json");
+    resource =
+        classLoader.getResource("examples/batch/githubEvents/githubEvents_offline_complexTypeHandling_schema.json");
     Preconditions.checkNotNull(resource);
     FileUtils.copyURLToFile(resource, schemaFile);
     resource = classLoader.getResource("examples/batch/githubEvents/ingestionJobComplexTypeHandlingSpec.yaml");

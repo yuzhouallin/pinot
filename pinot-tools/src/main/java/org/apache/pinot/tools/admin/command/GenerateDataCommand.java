@@ -39,43 +39,47 @@ import org.apache.pinot.spi.data.TimeGranularitySpec;
 import org.apache.pinot.spi.data.readers.FileFormat;
 import org.apache.pinot.spi.utils.JsonUtils;
 import org.apache.pinot.tools.Command;
-import org.kohsuke.args4j.Option;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import picocli.CommandLine;
 
 
 /**
  * Class to implement GenerateData command.
  *
  */
+@CommandLine.Command(name = "GenerateData")
 public class GenerateDataCommand extends AbstractBaseAdminCommand implements Command {
   private static final Logger LOGGER = LoggerFactory.getLogger(GenerateDataCommand.class);
 
   private final static String FORMAT_AVRO = "avro";
   private final static String FORMAT_CSV = "csv";
 
-  @Option(name = "-numRecords", required = true, metaVar = "<int>", usage = "Number of records to generate.")
+  @CommandLine.Option(names = {"-numRecords"}, required = true, description = "Number of records to generate.")
   private int _numRecords = 0;
 
-  @Option(name = "-numFiles", required = true, metaVar = "<int>", usage = "Number of files to generate.")
+  @CommandLine.Option(names = {"-numFiles"}, required = true, description = "Number of files to generate.")
   private int _numFiles = 0;
 
-  @Option(name = "-schemaFile", required = true, metaVar = "<string>", usage = "File containing schema for data.")
+  @CommandLine.Option(names = {"-schemaFile"}, required = true, description = "File containing schema for data.")
   private String _schemaFile = null;
 
-  @Option(name = "-schemaAnnotationFile", required = false, metaVar = "<string>", usage = "File containing dim/metrics for columns.")
+  @CommandLine.Option(names = {"-schemaAnnotationFile"}, required = false, 
+      description = "File containing dim/metrics for columns.")
   private String _schemaAnnFile;
 
-  @Option(name = "-outDir", required = true, metaVar = "<string>", usage = "Directory where data would be generated.")
+  @CommandLine.Option(names = {"-outDir"}, required = true, description = "Directory where data would be generated.")
   private String _outDir = null;
 
-  @Option(name = "-overwrite", required = false, usage = "Overwrite, if directory exists")
+  @CommandLine.Option(names = {"-overwrite"}, required = false, description = "Overwrite, if directory exists")
   boolean _overwrite;
 
-  @Option(name = "-help", required = false, help = true, aliases = {"-h", "--h", "--help"}, usage = "Print this message.")
+  @CommandLine.Option(names = {"-help", "-h", "--h", "--help"}, required = false, help = true,
+      description = "Print this message.")
   private boolean _help = false;
 
-  @Option(name = "-format", required = false, help = true, usage = "Output format ('avro' or 'csv').")
+  @CommandLine.Option(names = {"-format"}, required = false, help = true,
+      description = "Output format ('avro' or 'csv').")
   private String _format = FORMAT_AVRO;
 
   @Override
@@ -178,8 +182,8 @@ public class GenerateDataCommand extends AbstractBaseAdminCommand implements Com
 
   private DataGeneratorSpec buildDataGeneratorSpec(Schema schema, List<String> columns,
       HashMap<String, DataType> dataTypes, HashMap<String, FieldType> fieldTypes, HashMap<String, TimeUnit> timeUnits,
-      HashMap<String, Integer> cardinality, HashMap<String, IntRange> range, HashMap<String,
-      Map<String, Object>> pattern, Map<String, Double> mvCountMap, Map<String, Integer> lengthMap) {
+      HashMap<String, Integer> cardinality, HashMap<String, IntRange> range,
+      HashMap<String, Map<String, Object>> pattern, Map<String, Double> mvCountMap, Map<String, Integer> lengthMap) {
     for (final FieldSpec fs : schema.getAllFieldSpecs()) {
       String col = fs.getName();
 
@@ -218,8 +222,8 @@ public class GenerateDataCommand extends AbstractBaseAdminCommand implements Com
       }
     }
 
-    return new DataGeneratorSpec(columns, cardinality, range, pattern, mvCountMap, lengthMap, dataTypes, fieldTypes, timeUnits, FileFormat.AVRO,
-        _outDir, _overwrite);
+    return new DataGeneratorSpec(columns, cardinality, range, pattern, mvCountMap, lengthMap, dataTypes, fieldTypes,
+        timeUnits, FileFormat.AVRO, _outDir, _overwrite);
   }
 
   public static void main(String[] args)

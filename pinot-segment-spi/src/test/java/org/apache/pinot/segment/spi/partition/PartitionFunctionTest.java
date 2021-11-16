@@ -18,10 +18,14 @@
  */
 package org.apache.pinot.segment.spi.partition;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.util.Random;
-import org.apache.pinot.spi.utils.StringUtils;
-import org.testng.Assert;
+import org.apache.pinot.spi.utils.JsonUtils;
 import org.testng.annotations.Test;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
 
 
 /**
@@ -53,31 +57,31 @@ public class PartitionFunctionTest {
       String functionName = "MoDuLo";
       PartitionFunction partitionFunction =
           PartitionFunctionFactory.getPartitionFunction(functionName, expectedNumPartitions);
-      Assert.assertEquals(partitionFunction.toString().toLowerCase(), functionName.toLowerCase());
-      Assert.assertEquals(partitionFunction.getNumPartitions(), expectedNumPartitions);
+
+      testBasicProperties(partitionFunction, functionName, expectedNumPartitions);
 
       // Test int values.
       for (int j = 0; j < 1000; j++) {
         int value = random.nextInt();
-        Assert.assertEquals(partitionFunction.getPartition(value), (value % expectedNumPartitions));
+        assertEquals(partitionFunction.getPartition(value), (value % expectedNumPartitions));
       }
 
       // Test long values.
       for (int j = 0; j < 1000; j++) {
         long value = random.nextLong();
-        Assert.assertEquals(partitionFunction.getPartition(value), (value % expectedNumPartitions));
+        assertEquals(partitionFunction.getPartition(value), (value % expectedNumPartitions));
       }
 
       // Test Integer represented as String.
       for (int j = 0; j < 1000; j++) {
         int value = random.nextInt();
-        Assert.assertEquals(partitionFunction.getPartition(Integer.toString(value)), (value % expectedNumPartitions));
+        assertEquals(partitionFunction.getPartition(Integer.toString(value)), (value % expectedNumPartitions));
       }
 
       // Test Long represented as String.
       for (int j = 0; j < 1000; j++) {
         long value = random.nextLong();
-        Assert.assertEquals(partitionFunction.getPartition(Long.toString(value)), (value % expectedNumPartitions));
+        assertEquals(partitionFunction.getPartition(Long.toString(value)), (value % expectedNumPartitions));
       }
     }
   }
@@ -103,16 +107,15 @@ public class PartitionFunctionTest {
       }
 
       String functionName = "mUrmur";
-
       PartitionFunction partitionFunction =
           PartitionFunctionFactory.getPartitionFunction(functionName, expectedNumPartitions);
-      Assert.assertEquals(partitionFunction.toString().toLowerCase(), functionName.toLowerCase());
-      Assert.assertEquals(partitionFunction.getNumPartitions(), expectedNumPartitions);
+
+      testBasicProperties(partitionFunction, functionName, expectedNumPartitions);
 
       for (int j = 0; j < 1000; j++) {
         int value = random.nextInt();
         String stringValue = Integer.toString(value);
-        Assert.assertTrue(partitionFunction.getPartition(stringValue) < expectedNumPartitions,
+        assertTrue(partitionFunction.getPartition(stringValue) < expectedNumPartitions,
             "Illegal: " + partitionFunction.getPartition(stringValue) + " " + expectedNumPartitions);
       }
     }
@@ -141,12 +144,12 @@ public class PartitionFunctionTest {
       String functionName = "bYteArray";
       PartitionFunction partitionFunction =
           PartitionFunctionFactory.getPartitionFunction(functionName, expectedNumPartitions);
-      Assert.assertEquals(partitionFunction.toString().toLowerCase(), functionName.toLowerCase());
-      Assert.assertEquals(partitionFunction.getNumPartitions(), expectedNumPartitions);
+
+      testBasicProperties(partitionFunction, functionName, expectedNumPartitions);
 
       for (int j = 0; j < 1000; j++) {
         Integer value = random.nextInt();
-        Assert.assertTrue(partitionFunction.getPartition(value) < expectedNumPartitions,
+        assertTrue(partitionFunction.getPartition(value) < expectedNumPartitions,
             "Illegal: " + partitionFunction.getPartition(value) + " " + expectedNumPartitions);
       }
     }
@@ -168,14 +171,24 @@ public class PartitionFunctionTest {
       String functionName = "HaShCoDe";
       PartitionFunction partitionFunction =
           PartitionFunctionFactory.getPartitionFunction(functionName, expectedNumPartitions);
-      Assert.assertEquals(partitionFunction.toString().toLowerCase(), functionName.toLowerCase());
-      Assert.assertEquals(partitionFunction.getNumPartitions(), expectedNumPartitions);
+
+      testBasicProperties(partitionFunction, functionName, expectedNumPartitions);
 
       for (int j = 0; j < 1000; j++) {
         Integer value = random.nextInt();
-        Assert.assertEquals(partitionFunction.getPartition(value), Math.abs(value.hashCode()) % expectedNumPartitions);
+        assertEquals(partitionFunction.getPartition(value), Math.abs(value.hashCode()) % expectedNumPartitions);
       }
     }
+  }
+
+  private void testBasicProperties(PartitionFunction partitionFunction, String functionName, int numPartitions) {
+    assertEquals(partitionFunction.getName().toLowerCase(), functionName.toLowerCase());
+    assertEquals(partitionFunction.getNumPartitions(), numPartitions);
+
+    JsonNode jsonNode = JsonUtils.objectToJsonNode(partitionFunction);
+    assertEquals(jsonNode.size(), 2);
+    assertEquals(jsonNode.get("name").asText().toLowerCase(), functionName.toLowerCase());
+    assertEquals(jsonNode.get("numPartitions").asInt(), numPartitions);
   }
 
   /**
@@ -187,8 +200,10 @@ public class PartitionFunctionTest {
 
     // 10 values of size 7, were randomly generated, using {@link Random::nextBytes} with seed 100
     // Applied org.apache.kafka.common.utils.Utils::murmur2 to those values and stored in expectedMurmurValues
-    int[] expectedMurmurValues =
-        new int[]{-1044832774, -594851693, 1441878663, 1766739604, 1034724141, -296671913, 443511156, 1483601453, 1819695080, -931669296};
+    int[] expectedMurmurValues = new int[]{
+        -1044832774, -594851693, 1441878663, 1766739604, 1034724141, -296671913, 443511156, 1483601453, 1819695080,
+        -931669296
+    };
 
     long seed = 100;
     Random random = new Random(seed);
@@ -203,18 +218,22 @@ public class PartitionFunctionTest {
     for (int expectedMurmurValue : expectedMurmurValues) {
       random.nextBytes(array);
       int actualMurmurValue = murmurPartitionFunction.murmur2(array);
-      Assert.assertEquals(actualMurmurValue, expectedMurmurValue);
+      assertEquals(actualMurmurValue, expectedMurmurValue);
     }
   }
 
   /**
-   * Tests the equivalence of partitioning using org.apache.kafka.common.utils.Utils::partition and {@link MurmurPartitionFunction::getPartition}
+   * Tests the equivalence of partitioning using org.apache.kafka.common.utils.Utils::partition and
+   * {@link MurmurPartitionFunction
+   * ::getPartition}
    */
   @Test
   public void testMurmurPartitionFunctionEquivalence() {
 
     // 10 String values of size 7, were randomly generated, using {@link Random::nextBytes} with seed 100
-    // Applied {@link MurmurPartitionFunction} initialized with 5 partitions, by overriding {@MurmurPartitionFunction::murmur2} with org.apache.kafka.common.utils.Utils::murmur2
+    // Applied {@link MurmurPartitionFunction} initialized with 5 partitions, by overriding
+    // {@MurmurPartitionFunction::murmur2} with org
+    // .apache.kafka.common.utils.Utils::murmur2
     // stored the results in expectedPartitions
     int[] expectedPartitions = new int[]{1, 4, 4, 1, 1, 2, 0, 4, 2, 3};
 
@@ -228,7 +247,8 @@ public class PartitionFunctionTest {
   }
 
   /**
-   * Tests the equivalence of kafka.producer.ByteArrayPartitioner::partition and {@link ByteArrayPartitionFunction ::getPartition}
+   * Tests the equivalence of kafka.producer.ByteArrayPartitioner::partition and {@link ByteArrayPartitionFunction
+   * ::getPartition}
    */
   @Test
   public void testByteArrayPartitionFunctionEquivalence() {
@@ -255,9 +275,9 @@ public class PartitionFunctionTest {
     byte[] array = new byte[7];
     for (int expectedPartition : expectedPartitions) {
       random.nextBytes(array);
-      String nextString = StringUtils.decodeUtf8(array);
+      String nextString = new String(array, UTF_8);
       int actualPartition = partitionFunction.getPartition(nextString);
-      Assert.assertEquals(actualPartition, expectedPartition);
+      assertEquals(actualPartition, expectedPartition);
     }
   }
 }

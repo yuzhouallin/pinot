@@ -33,6 +33,7 @@ import org.apache.helix.HelixManager;
 import org.apache.helix.store.zk.ZkHelixPropertyStore;
 import org.apache.pinot.common.metrics.ServerMetrics;
 import org.apache.pinot.common.utils.LLCSegmentName;
+import org.apache.pinot.common.utils.StringUtil;
 import org.apache.pinot.core.data.manager.InstanceDataManager;
 import org.apache.pinot.core.data.manager.offline.OfflineTableDataManager;
 import org.apache.pinot.core.data.manager.realtime.SegmentUploader;
@@ -46,7 +47,7 @@ import org.apache.pinot.segment.local.segment.creator.impl.SegmentIndexCreationD
 import org.apache.pinot.segment.spi.ImmutableSegment;
 import org.apache.pinot.segment.spi.creator.SegmentGeneratorConfig;
 import org.apache.pinot.segment.spi.creator.SegmentIndexCreationDriver;
-import org.apache.pinot.server.api.access.AllowAllAccessFactory;
+import org.apache.pinot.server.access.AllowAllAccessFactory;
 import org.apache.pinot.server.starter.ServerInstance;
 import org.apache.pinot.server.starter.helix.AdminApiApplication;
 import org.apache.pinot.server.starter.helix.DefaultHelixStarterServerConfig;
@@ -76,7 +77,8 @@ public abstract class BaseResourceTest {
   protected static final String LLC_SEGMENT_NAME_FOR_UPLOAD_FAILURE =
       new LLCSegmentName(TableNameBuilder.REALTIME.tableNameWithType(TABLE_NAME), 2, 0, System.currentTimeMillis())
           .getSegmentName();
-  protected static final String SEGMENT_DOWNLOAD_URL = "testSegmentDownloadUrl";
+  protected static final String SEGMENT_DOWNLOAD_URL = StringUtil
+      .join("/", "hdfs://root", TABLE_NAME, LLC_SEGMENT_NAME_FOR_UPLOAD_SUCCESS);
 
   private final Map<String, TableDataManager> _tableDataManagerMap = new HashMap<>();
   protected final List<ImmutableSegment> _realtimeIndexSegments = new ArrayList<>();
@@ -130,8 +132,8 @@ public abstract class BaseResourceTest {
         new ListenerConfig(CommonConstants.HTTP_PROTOCOL, "0.0.0.0", CommonConstants.Server.DEFAULT_ADMIN_API_PORT,
             CommonConstants.HTTP_PROTOCOL, new TlsConfig())));
 
-    _webTarget = ClientBuilder.newClient()
-        .target(String.format("http://%s:%d", NetUtils.getHostAddress(), CommonConstants.Server.DEFAULT_ADMIN_API_PORT));
+    _webTarget = ClientBuilder.newClient().target(
+        String.format("http://%s:%d", NetUtils.getHostAddress(), CommonConstants.Server.DEFAULT_ADMIN_API_PORT));
   }
 
   @AfterClass

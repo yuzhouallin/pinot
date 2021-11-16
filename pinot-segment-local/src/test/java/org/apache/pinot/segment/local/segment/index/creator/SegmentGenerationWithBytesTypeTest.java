@@ -36,8 +36,8 @@ import org.apache.commons.io.FileUtils;
 import org.apache.pinot.plugin.inputformat.avro.AvroUtils;
 import org.apache.pinot.segment.local.aggregator.PercentileTDigestValueAggregator;
 import org.apache.pinot.segment.local.indexsegment.immutable.ImmutableSegmentLoader;
-import org.apache.pinot.segment.local.loader.LocalSegmentDirectoryLoader;
 import org.apache.pinot.segment.local.segment.creator.impl.SegmentIndexCreationDriverImpl;
+import org.apache.pinot.segment.local.segment.index.loader.IndexLoadingConfig;
 import org.apache.pinot.segment.local.segment.index.readers.BaseImmutableDictionary;
 import org.apache.pinot.segment.local.segment.readers.GenericRowRecordReader;
 import org.apache.pinot.segment.local.segment.readers.PinotSegmentRecordReader;
@@ -45,6 +45,7 @@ import org.apache.pinot.segment.spi.ImmutableSegment;
 import org.apache.pinot.segment.spi.IndexSegment;
 import org.apache.pinot.segment.spi.SegmentMetadata;
 import org.apache.pinot.segment.spi.creator.SegmentGeneratorConfig;
+import org.apache.pinot.segment.spi.loader.SegmentDirectoryLoaderContext;
 import org.apache.pinot.segment.spi.loader.SegmentDirectoryLoaderRegistry;
 import org.apache.pinot.spi.config.table.TableConfig;
 import org.apache.pinot.spi.config.table.TableType;
@@ -199,10 +200,10 @@ public class SegmentGenerationWithBytesTypeTest {
     schema.addField(new MetricFieldSpec(FIXED_BYTES_UNSORTED_COLUMN, FieldSpec.DataType.BYTES));
     schema.addField(new MetricFieldSpec(VARIABLE_BYTES_COLUMN, FieldSpec.DataType.BYTES));
 
-    List<byte[]> _fixedExpected = new ArrayList<>(NUM_ROWS);
-    List<byte[]> _varExpected = new ArrayList<>(NUM_ROWS);
+    List<byte[]> fixedExpected = new ArrayList<>(NUM_ROWS);
+    List<byte[]> varExpected = new ArrayList<>(NUM_ROWS);
 
-    buildAvro(schema, _fixedExpected, _varExpected);
+    buildAvro(schema, fixedExpected, varExpected);
 
     IndexSegment segment = buildSegmentFromAvro(schema, AVRO_DIR_NAME, AVRO_NAME, SEGMENT_NAME);
     SegmentMetadata metadata = segment.getSegmentMetadata();
@@ -216,9 +217,9 @@ public class SegmentGenerationWithBytesTypeTest {
     int i = 0;
     while (reader.hasNext()) {
       row = reader.next(row);
-      Assert.assertEquals(ByteArray.compare((byte[]) row.getValue(FIXED_BYTES_UNSORTED_COLUMN), _fixedExpected.get(i)),
-          0);
-      Assert.assertEquals(ByteArray.compare((byte[]) row.getValue(VARIABLE_BYTES_COLUMN), _varExpected.get(i++)), 0);
+      Assert
+          .assertEquals(ByteArray.compare((byte[]) row.getValue(FIXED_BYTES_UNSORTED_COLUMN), fixedExpected.get(i)), 0);
+      Assert.assertEquals(ByteArray.compare((byte[]) row.getValue(VARIABLE_BYTES_COLUMN), varExpected.get(i++)), 0);
     }
     segment.destroy();
   }
@@ -270,9 +271,10 @@ public class SegmentGenerationWithBytesTypeTest {
     driver.build();
 
     Map<String, Object> props = new HashMap<>();
-    props.put(LocalSegmentDirectoryLoader.READ_MODE_KEY, ReadMode.mmap.toString());
-    SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(driver.getOutputDirectory().toURI(), new PinotConfiguration(props));
+    props.put(IndexLoadingConfig.READ_MODE_KEY, ReadMode.mmap.toString());
+    SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(driver.getOutputDirectory().toURI(),
+            new SegmentDirectoryLoaderContext(_tableConfig, null, null, new PinotConfiguration(props)));
     recordReader.rewind();
     return recordReader;
   }
@@ -281,11 +283,11 @@ public class SegmentGenerationWithBytesTypeTest {
    * Build Avro file containing serialized TDigest bytes.
    *
    * @param schema Schema of data (one fixed and one variable column)
-   * @param _fixedExpected Serialized bytes of fixed length column are populated here
-   * @param _varExpected Serialized bytes of variable length column are populated here
+   * @param fixedExpected Serialized bytes of fixed length column are populated here
+   * @param varExpected Serialized bytes of variable length column are populated here
    * @throws IOException
    */
-  private void buildAvro(Schema schema, List<byte[]> _fixedExpected, List<byte[]> _varExpected)
+  private void buildAvro(Schema schema, List<byte[]> fixedExpected, List<byte[]> varExpected)
       throws IOException {
     org.apache.avro.Schema avroSchema = AvroUtils.getAvroSchemaFromPinotSchema(schema);
 
@@ -304,7 +306,7 @@ public class SegmentGenerationWithBytesTypeTest {
 
         ByteBuffer buffer = ByteBuffer.allocate(tDigest.byteSize());
         tDigest.asBytes(buffer);
-        _fixedExpected.add(buffer.array());
+        fixedExpected.add(buffer.array());
 
         buffer.flip();
         record.put(FIXED_BYTES_UNSORTED_COLUMN, buffer);
@@ -315,7 +317,7 @@ public class SegmentGenerationWithBytesTypeTest {
 
         buffer = ByteBuffer.allocate(tDigest.byteSize());
         tDigest.asBytes(buffer);
-        _varExpected.add(buffer.array());
+        varExpected.add(buffer.array());
 
         buffer.flip();
         record.put(VARIABLE_BYTES_COLUMN, buffer);

@@ -33,15 +33,13 @@ import org.slf4j.LoggerFactory;
 
 
 /**
- * Helper class to dynamically register all annotated {@link SegmentLoader} methods
+ * Helper class to dynamically register all {@link SegmentDirectoryLoader} annotated with {@link SegmentLoader}
  */
 public class SegmentDirectoryLoaderRegistry {
-  private static final String LOCAL_TIER_BACKEND_NAME = "local";
-  private SegmentDirectoryLoaderRegistry() {
-  }
-
   private static final Logger LOGGER = LoggerFactory.getLogger(SegmentDirectoryLoaderRegistry.class);
-  private static final Map<String, SegmentDirectoryLoader> _segmentDirectoryLoaderMap = new HashMap<>();
+
+  public static final String DEFAULT_SEGMENT_DIRECTORY_LOADER_NAME = "default";
+  private static final Map<String, SegmentDirectoryLoader> SEGMENT_DIRECTORY_LOADER_MAP = new HashMap<>();
 
   static {
     Reflections reflections = new Reflections(
@@ -53,14 +51,13 @@ public class SegmentDirectoryLoaderRegistry {
       SegmentLoader segmentLoaderAnnotation = loaderClass.getAnnotation(SegmentLoader.class);
       if (segmentLoaderAnnotation.enabled()) {
         if (segmentLoaderAnnotation.name().isEmpty()) {
-          LOGGER.error("Cannot register an unnamed SegmentDirectoryLoader for annotation {} ",
-              segmentLoaderAnnotation.toString());
+          LOGGER.error("Cannot register an unnamed SegmentDirectoryLoader for annotation {} ", segmentLoaderAnnotation);
         } else {
           String segmentLoaderName = segmentLoaderAnnotation.name();
           SegmentDirectoryLoader segmentDirectoryLoader;
           try {
             segmentDirectoryLoader = (SegmentDirectoryLoader) loaderClass.newInstance();
-            _segmentDirectoryLoaderMap.putIfAbsent(segmentLoaderName, segmentDirectoryLoader);
+            SEGMENT_DIRECTORY_LOADER_MAP.putIfAbsent(segmentLoaderName, segmentDirectoryLoader);
           } catch (Exception e) {
             LOGGER.error(
                 String.format("Unable to register SegmentDirectoryLoader %s . Cannot instantiate.", segmentLoaderName),
@@ -70,20 +67,30 @@ public class SegmentDirectoryLoaderRegistry {
       }
     });
     LOGGER.info("Initialized {} with {} segmentDirectoryLoaders: {}", SegmentDirectoryLoaderRegistry.class.getName(),
-        _segmentDirectoryLoaderMap.size(), _segmentDirectoryLoaderMap.keySet());
+        SEGMENT_DIRECTORY_LOADER_MAP.size(), SEGMENT_DIRECTORY_LOADER_MAP.keySet());
+  }
+
+  private SegmentDirectoryLoaderRegistry() {
   }
 
   /**
-   * Returns the segment directory loader instance from instantiated map, for the given tier backend
+   * Returns the segment directory loader instance from instantiated map, for the given segmentDirectoryLoader name
    */
-  public static SegmentDirectoryLoader getSegmentDirectoryLoader(String tierBackend) {
-    return _segmentDirectoryLoaderMap.get(tierBackend);
+  public static SegmentDirectoryLoader getSegmentDirectoryLoader(String segmentDirectoryLoader) {
+    return SEGMENT_DIRECTORY_LOADER_MAP.get(segmentDirectoryLoader);
   }
 
   /**
-   * Returns the instance of 'localSegmentDirectoryLoader'
+   * Explicitly adds a {@link SegmentDirectoryLoader} to the map
    */
-  public static SegmentDirectoryLoader getLocalSegmentDirectoryLoader() {
-    return _segmentDirectoryLoaderMap.get(LOCAL_TIER_BACKEND_NAME);
+  public static void setSegmentDirectoryLoader(String segmentDirectoryLoaderName, SegmentDirectoryLoader loader) {
+    SEGMENT_DIRECTORY_LOADER_MAP.put(segmentDirectoryLoaderName, loader);
+  }
+
+  /**
+   * Returns the 'default' {@link SegmentDirectoryLoader}
+   */
+  public static SegmentDirectoryLoader getDefaultSegmentDirectoryLoader() {
+    return SEGMENT_DIRECTORY_LOADER_MAP.get(DEFAULT_SEGMENT_DIRECTORY_LOADER_NAME);
   }
 }

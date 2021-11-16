@@ -40,6 +40,11 @@ import static org.apache.pinot.tools.Quickstart.printStatus;
 
 
 public class RealtimeComplexTypeHandlingQuickStart extends QuickStartBase {
+  @Override
+  public List<String> types() {
+      return Arrays.asList("REALTIME_COMPLEX_TYPE", "REALTIME-COMPLEX-TYPE",
+              "STREAM_COMPLEX_TYPE", "STREAM-COMPLEX-TYPE");
+  }
   private StreamDataServerStartable _kafkaStarter;
 
   public static void main(String[] args)
@@ -64,7 +69,8 @@ public class RealtimeComplexTypeHandlingQuickStart extends QuickStartBase {
     URL resource = classLoader.getResource("examples/stream/meetupRsvp/complexTypeHandling_meetupRsvp_schema.json");
     Preconditions.checkNotNull(resource);
     FileUtils.copyURLToFile(resource, schemaFile);
-    resource = classLoader.getResource("examples/stream/meetupRsvp/complexTypeHandling_meetupRsvp_realtime_table_config.json");
+    resource =
+        classLoader.getResource("examples/stream/meetupRsvp/complexTypeHandling_meetupRsvp_realtime_table_config.json");
     Preconditions.checkNotNull(resource);
     FileUtils.copyURLToFile(resource, tableConfigFile);
 
@@ -106,7 +112,8 @@ public class RealtimeComplexTypeHandlingQuickStart extends QuickStartBase {
     printStatus(Color.YELLOW, "***** Realtime json-index quickstart setup complete *****");
 
     String q1 =
-        "select \"group.group_topics.urlkey\", \"group.group_topics.topic_name\", \"group.group_id\" from meetupRsvp limit 10";
+        "select \"group.group_topics.urlkey\", \"group.group_topics.topic_name\", \"group.group_id\" from meetupRsvp "
+            + "limit 10";
     printStatus(Color.YELLOW, "Events related to fitness");
     printStatus(Color.CYAN, "Query : " + q1);
     printStatus(Color.YELLOW, prettyPrintResponse(runner.runQuery(q1)));

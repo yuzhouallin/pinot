@@ -22,19 +22,15 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.common.annotations.VisibleForTesting;
 import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.JsonPath;
-import com.jayway.jsonpath.Option;
+import com.jayway.jsonpath.ParseContext;
+import com.jayway.jsonpath.Predicate;
 import com.jayway.jsonpath.spi.cache.CacheProvider;
 import com.jayway.jsonpath.spi.json.JacksonJsonProvider;
-import com.jayway.jsonpath.spi.json.JsonProvider;
 import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
-import com.jayway.jsonpath.spi.mapper.MappingProvider;
 import java.util.Arrays;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-
-import org.apache.pinot.common.function.SimpleJsonPathMapCache;
+import org.apache.pinot.common.function.JsonPathCache;
 import org.apache.pinot.spi.annotations.ScalarFunction;
 import org.apache.pinot.spi.utils.JsonUtils;
 
@@ -51,33 +47,17 @@ import org.apache.pinot.spi.utils.JsonUtils;
  *   </code>
  */
 public class JsonFunctions {
-  private static final int DEFAULT_JSON_PATH_CACHE_SIZE_MAX = 1024 * 16;
-
-  static {
-    CacheProvider.setCache(new SimpleJsonPathMapCache(DEFAULT_JSON_PATH_CACHE_SIZE_MAX));
-
-    Configuration.setDefaults(new Configuration.Defaults() {
-      private final JsonProvider jsonProvider = new ArrayAwareJacksonJsonProvider();
-      private final MappingProvider mappingProvider = new JacksonMappingProvider();
-
-      @Override
-      public JsonProvider jsonProvider() {
-        return jsonProvider;
-      }
-
-      @Override
-      public MappingProvider mappingProvider() {
-        return mappingProvider;
-      }
-
-      @Override
-      public Set<Option> options() {
-        return EnumSet.noneOf(Option.class);
-      }
-    });
+  private JsonFunctions() {
   }
 
-  private JsonFunctions() {
+  private static final Predicate[] NO_PREDICATES = new Predicate[0];
+  private static final ParseContext PARSE_CONTEXT = JsonPath.using(
+      new Configuration.ConfigurationBuilder().jsonProvider(new ArrayAwareJacksonJsonProvider())
+          .mappingProvider(new JacksonMappingProvider()).build());
+
+  static {
+    // Set the JsonPath cache before the cache is accessed
+    CacheProvider.setCache(new JsonPathCache());
   }
 
   /**
@@ -104,9 +84,9 @@ public class JsonFunctions {
   @ScalarFunction
   public static Object jsonPath(Object object, String jsonPath) {
     if (object instanceof String) {
-      return JsonPath.read((String) object, jsonPath);
+      return PARSE_CONTEXT.parse((String) object).read(jsonPath, NO_PREDICATES);
     }
-    return JsonPath.read(object, jsonPath);
+    return PARSE_CONTEXT.parse(object).read(jsonPath, NO_PREDICATES);
   }
 
   /**
@@ -116,9 +96,9 @@ public class JsonFunctions {
   public static Object[] jsonPathArray(Object object, String jsonPath)
       throws JsonProcessingException {
     if (object instanceof String) {
-      return convertObjectToArray(JsonPath.read((String) object, jsonPath));
+      return convertObjectToArray(PARSE_CONTEXT.parse((String) object).read(jsonPath, NO_PREDICATES));
     }
-    return convertObjectToArray(JsonPath.read(object, jsonPath));
+    return convertObjectToArray(PARSE_CONTEXT.parse(object).read(jsonPath, NO_PREDICATES));
   }
 
   @ScalarFunction

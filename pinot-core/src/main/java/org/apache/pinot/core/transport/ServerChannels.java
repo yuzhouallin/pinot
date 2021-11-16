@@ -30,6 +30,7 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.codec.LengthFieldPrepender;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslProvider;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import javax.annotation.concurrent.ThreadSafe;
@@ -121,7 +122,8 @@ public class ServerChannels {
 
     private void attachSSLHandler(SocketChannel ch) {
       try {
-        SslContextBuilder sslContextBuilder = SslContextBuilder.forClient();
+        SslContextBuilder sslContextBuilder = SslContextBuilder.forClient()
+            .sslProvider(SslProvider.valueOf(_tlsConfig.getSslProvider()));
 
         if (_tlsConfig.getKeyStorePath() != null) {
           sslContextBuilder.keyManager(TlsUtils.createKeyManagerFactory(_tlsConfig));
@@ -132,7 +134,6 @@ public class ServerChannels {
         }
 
         ch.pipeline().addLast("ssl", sslContextBuilder.build().newHandler(ch.alloc()));
-
       } catch (Exception e) {
         throw new RuntimeException(e);
       }
@@ -151,8 +152,9 @@ public class ServerChannels {
       long sendRequestStartTimeMs = System.currentTimeMillis();
       _channel.writeAndFlush(Unpooled.wrappedBuffer(requestBytes)).addListener(f -> {
         long requestSentLatencyMs = System.currentTimeMillis() - sendRequestStartTimeMs;
-        _brokerMetrics.addTimedTableValue(rawTableName, BrokerTimer.NETTY_CONNECTION_SEND_REQUEST_LATENCY,
-            requestSentLatencyMs, TimeUnit.MILLISECONDS);
+        _brokerMetrics
+            .addTimedTableValue(rawTableName, BrokerTimer.NETTY_CONNECTION_SEND_REQUEST_LATENCY, requestSentLatencyMs,
+                TimeUnit.MILLISECONDS);
         asyncQueryResponse.markRequestSent(serverRoutingInstance, requestSentLatencyMs);
       });
       _brokerMetrics.addMeteredGlobalValue(BrokerMeter.NETTY_CONNECTION_REQUESTS_SENT, 1);

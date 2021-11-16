@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 import javax.annotation.Nullable;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.helix.HelixAdmin;
@@ -51,9 +52,11 @@ import org.apache.pinot.common.metadata.ZKMetadataProvider;
 import org.apache.pinot.common.metrics.ServerMeter;
 import org.apache.pinot.common.metrics.ServerMetrics;
 import org.apache.pinot.common.restlet.resources.SystemResourceInfo;
+import org.apache.pinot.common.utils.ServiceStartableUtils;
 import org.apache.pinot.common.utils.ServiceStatus;
 import org.apache.pinot.common.utils.ServiceStatus.Status;
 import org.apache.pinot.common.utils.config.TagNameUtils;
+import org.apache.pinot.common.utils.fetcher.SegmentFetcherFactory;
 import org.apache.pinot.common.utils.helix.HelixHelper;
 import org.apache.pinot.core.common.datatable.DataTableBuilder;
 import org.apache.pinot.core.data.manager.InstanceDataManager;
@@ -64,12 +67,13 @@ import org.apache.pinot.core.util.ListenerConfigUtil;
 import org.apache.pinot.core.util.TlsUtils;
 import org.apache.pinot.segment.local.realtime.impl.invertedindex.RealtimeLuceneIndexRefreshState;
 import org.apache.pinot.segment.spi.memory.PinotDataBuffer;
-import org.apache.pinot.server.api.access.AccessControlFactory;
+import org.apache.pinot.server.access.AccessControlFactory;
 import org.apache.pinot.server.conf.ServerConf;
 import org.apache.pinot.server.realtime.ControllerLeaderLocator;
 import org.apache.pinot.server.realtime.ServerSegmentCompletionProtocolHandler;
 import org.apache.pinot.server.starter.ServerInstance;
 import org.apache.pinot.server.starter.ServerQueriesDisabledTracker;
+import org.apache.pinot.spi.crypt.PinotCrypterFactory;
 import org.apache.pinot.spi.env.PinotConfiguration;
 import org.apache.pinot.spi.environmentprovider.PinotEnvironmentProvider;
 import org.apache.pinot.spi.environmentprovider.PinotEnvironmentProviderFactory;
@@ -85,6 +89,7 @@ import org.apache.pinot.spi.utils.CommonConstants.Server;
 import org.apache.pinot.spi.utils.CommonConstants.Server.SegmentCompletionProtocol;
 import org.apache.pinot.spi.utils.NetUtils;
 import org.apache.pinot.spi.utils.builder.TableNameBuilder;
+import org.apache.pinot.sql.parsers.rewriter.QueryRewriterFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -132,10 +137,12 @@ public abstract class BaseServerStarter implements ServiceStartable {
       throws Exception {
     // Make a clone so that changes to the config won't propagate to the caller
     _serverConf = serverConf.clone();
-    _listenerConfigs = ListenerConfigUtil.buildServerAdminConfigs(_serverConf);
-    _helixClusterName = _serverConf.getProperty(CommonConstants.Helix.CONFIG_OF_CLUSTER_NAME);
     _zkAddress = _serverConf.getProperty(CommonConstants.Helix.CONFIG_OF_ZOOKEEPR_SERVER);
+    _helixClusterName = _serverConf.getProperty(CommonConstants.Helix.CONFIG_OF_CLUSTER_NAME);
+    ServiceStartableUtils.applyClusterConfig(_serverConf, _zkAddress, _helixClusterName, ServiceRole.SERVER);
 
+    setupHelixSystemProperties();
+    _listenerConfigs = ListenerConfigUtil.buildServerAdminConfigs(_serverConf);
     _hostname = _serverConf.getProperty(Helix.KEY_OF_SERVER_NETTY_HOST,
         _serverConf.getProperty(Helix.SET_INSTANCE_ID_TO_HOSTNAME_KEY, false) ? NetUtils.getHostnameOrAddress()
             : NetUtils.getHostAddress());
@@ -170,6 +177,11 @@ public abstract class BaseServerStarter implements ServiceStartable {
     // Set data table version send to broker.
     DataTableBuilder.setCurrentDataTableVersion(_serverConf
         .getProperty(Server.CONFIG_OF_CURRENT_DATA_TABLE_VERSION, Server.DEFAULT_CURRENT_DATA_TABLE_VERSION));
+
+    LOGGER.info("Initializing Helix manager with zkAddress: {}, clusterName: {}, instanceId: {}", _zkAddress,
+        _helixClusterName, _instanceId);
+    _helixManager =
+        HelixManagerFactory.getZKHelixManager(_helixClusterName, _instanceId, InstanceType.PARTICIPANT, _zkAddress);
   }
 
   /**
@@ -200,7 +212,8 @@ public abstract class BaseServerStarter implements ServiceStartable {
   }
 
   /**
-   * Fetches the resources to monitor and registers the {@link org.apache.pinot.common.utils.ServiceStatus.ServiceStatusCallback}s
+   * Fetches the resources to monitor and registers the
+   * {@link org.apache.pinot.common.utils.ServiceStatus.ServiceStatusCallback}s
    */
   private void registerServiceStatusHandler() {
     double minResourcePercentForStartup = _serverConf
@@ -209,11 +222,14 @@ public abstract class BaseServerStarter implements ServiceStartable {
     int realtimeConsumptionCatchupWaitMs = _serverConf
         .getProperty(Server.CONFIG_OF_STARTUP_REALTIME_CONSUMPTION_CATCHUP_WAIT_MS,
             Server.DEFAULT_STARTUP_REALTIME_CONSUMPTION_CATCHUP_WAIT_MS);
+    boolean isOffsetBasedConsumptionStatusCheckerEnabled = _serverConf
+        .getProperty(Server.CONFIG_OF_ENABLE_REALTIME_OFFSET_BASED_CONSUMPTION_STATUS_CHECKER,
+            Server.DEFAULT_ENABLE_REALTIME_OFFSET_BASED_CONSUMPTION_STATUS_CHECKER);
 
     // collect all resources which have this instance in the ideal state
     List<String> resourcesToMonitor = new ArrayList<>();
-    // if even 1 resource has this instance in ideal state with state CONSUMING, set this to true
-    boolean foundConsuming = false;
+
+    Set<String> consumingSegments = new HashSet<>();
     boolean checkRealtime = realtimeConsumptionCatchupWaitMs > 0;
 
     for (String resourceName : _helixAdmin.getResourcesInCluster(_helixClusterName)) {
@@ -232,12 +248,11 @@ public abstract class BaseServerStarter implements ServiceStartable {
             break;
           }
         }
-        if (checkRealtime && !foundConsuming && TableNameBuilder.isRealtimeTableResource(resourceName)) {
+        if (checkRealtime && TableNameBuilder.isRealtimeTableResource(resourceName)) {
           for (String partitionName : idealState.getPartitionSet()) {
             if (StateModel.SegmentStateModel.CONSUMING
                 .equals(idealState.getInstanceStateMap(partitionName).get(_instanceId))) {
-              foundConsuming = true;
-              break;
+              consumingSegments.add(partitionName);
             }
           }
         }
@@ -252,10 +267,18 @@ public abstract class BaseServerStarter implements ServiceStartable {
     serviceStatusCallbackListBuilder.add(
         new ServiceStatus.IdealStateAndExternalViewMatchServiceStatusCallback(_helixManager, _helixClusterName,
             _instanceId, resourcesToMonitor, minResourcePercentForStartup));
+    boolean foundConsuming = !consumingSegments.isEmpty();
     if (checkRealtime && foundConsuming) {
+      Supplier<Integer> getNumConsumingSegmentsNotReachedTheirLatestOffset = null;
+      if (isOffsetBasedConsumptionStatusCheckerEnabled) {
+        OffsetBasedConsumptionStatusChecker consumptionStatusChecker =
+            new OffsetBasedConsumptionStatusChecker(_serverInstance.getInstanceDataManager(), consumingSegments);
+        getNumConsumingSegmentsNotReachedTheirLatestOffset =
+            consumptionStatusChecker::getNumConsumingSegmentsNotReachedTheirLatestOffset;
+      }
       serviceStatusCallbackListBuilder.add(
           new ServiceStatus.RealtimeConsumptionCatchupServiceStatusCallback(_helixManager, _helixClusterName,
-              _instanceId, realtimeConsumptionCatchupWaitMs));
+              _instanceId, realtimeConsumptionCatchupWaitMs, getNumConsumingSegmentsNotReachedTheirLatestOffset));
     }
     LOGGER.info("Registering service status handler");
     ServiceStatus.setServiceStatusCallback(_instanceId,
@@ -359,11 +382,18 @@ public abstract class BaseServerStarter implements ServiceStartable {
       TlsUtils.installDefaultSSLSocketFactory(tlsDefaults);
     }
 
-    LOGGER.info("Initializing Helix manager with zkAddress: {}, clusterName: {}, instanceId: {}", _zkAddress,
-        _helixClusterName, _instanceId);
-    setupHelixSystemProperties();
-    _helixManager =
-        HelixManagerFactory.getZKHelixManager(_helixClusterName, _instanceId, InstanceType.PARTICIPANT, _zkAddress);
+    LOGGER.info("Initializing accessControlFactory");
+    String accessControlFactoryClass =
+        _serverConf.getProperty(Server.ACCESS_CONTROL_FACTORY_CLASS, Server.DEFAULT_ACCESS_CONTROL_FACTORY_CLASS);
+    LOGGER.info("Using class: {} as the AccessControlFactory", accessControlFactoryClass);
+    final AccessControlFactory accessControlFactory;
+    try {
+      accessControlFactory = PluginManager.get().createInstance(accessControlFactoryClass);
+    } catch (Exception e) {
+      throw new RuntimeException(
+          "Caught exception while creating new AccessControlFactory instance using class '" + accessControlFactoryClass
+              + "'", e);
+    }
 
     LOGGER.info("Initializing server instance and registering state model factory");
     Utils.logVersions();
@@ -371,13 +401,12 @@ public abstract class BaseServerStarter implements ServiceStartable {
     ServerSegmentCompletionProtocolHandler
         .init(_serverConf.subset(SegmentCompletionProtocol.PREFIX_OF_CONFIG_OF_SEGMENT_UPLOADER));
     ServerConf serverInstanceConfig = DefaultHelixStarterServerConfig.getDefaultHelixServerConfig(_serverConf);
-    _serverInstance = new ServerInstance(serverInstanceConfig, _helixManager);
+    _serverInstance = new ServerInstance(serverInstanceConfig, _helixManager, accessControlFactory);
     ServerMetrics serverMetrics = _serverInstance.getServerMetrics();
     InstanceDataManager instanceDataManager = _serverInstance.getInstanceDataManager();
-    SegmentFetcherAndLoader fetcherAndLoader =
-        new SegmentFetcherAndLoader(_serverConf, instanceDataManager, serverMetrics);
+    initSegmentFetcher(_serverConf);
     StateModelFactory<?> stateModelFactory =
-        new SegmentOnlineOfflineStateModelFactory(_instanceId, instanceDataManager, fetcherAndLoader);
+        new SegmentOnlineOfflineStateModelFactory(_instanceId, instanceDataManager);
     _helixManager.getStateMachineEngine()
         .registerStateModelFactory(SegmentOnlineOfflineStateModelFactory.getStateModelName(), stateModelFactory);
     // Start the server instance as a pre-connect callback so that it starts after connecting to the ZK in order to
@@ -390,17 +419,6 @@ public abstract class BaseServerStarter implements ServiceStartable {
     updateInstanceConfigIfNeeded();
 
     // Start restlet server for admin API endpoint
-    String accessControlFactoryClass =
-        _serverConf.getProperty(Server.ACCESS_CONTROL_FACTORY_CLASS, Server.DEFAULT_ACCESS_CONTROL_FACTORY_CLASS);
-    LOGGER.info("Using class: {} as the AccessControlFactory", accessControlFactoryClass);
-    final AccessControlFactory accessControlFactory;
-    try {
-      accessControlFactory = PluginManager.get().createInstance(accessControlFactoryClass);
-    } catch (Exception e) {
-      throw new RuntimeException(
-          "Caught exception while creating new AccessControlFactory instance using class '" + accessControlFactoryClass
-              + "'", e);
-    }
 
     // Update admin API port
     LOGGER.info("Starting server admin application on: {}", ListenerConfigUtil.toString(_listenerConfigs));
@@ -445,9 +463,13 @@ public abstract class BaseServerStarter implements ServiceStartable {
       _helixAdmin.removeConfig(_instanceConfigScope, Collections.singletonList(Instance.GRPC_PORT_KEY));
     }
 
+    // Init QueryRewriterFactory
+    LOGGER.info("Initializing QueryRewriterFactory");
+    QueryRewriterFactory.init(_serverConf.getProperty(Server.CONFIG_OF_SERVER_QUERY_REWRITER_CLASS_NAMES));
+
     // Register message handler factory
     SegmentMessageHandlerFactory messageHandlerFactory =
-        new SegmentMessageHandlerFactory(fetcherAndLoader, instanceDataManager, serverMetrics);
+        new SegmentMessageHandlerFactory(instanceDataManager, serverMetrics);
     _helixManager.getMessagingService()
         .registerMessageHandlerFactory(Message.MessageType.USER_DEFINE_MSG.toString(), messageHandlerFactory);
 
@@ -548,7 +570,8 @@ public abstract class BaseServerStarter implements ServiceStartable {
       }
       long sleepTimeMs = Math.min(noQueryThresholdMs - noQueryTimeMs, endTimeMs - currentTimeMs);
       LOGGER.info(
-          "Sleep for {}ms as there are still incoming queries (no query time: {}ms is smaller than the threshold: {}ms)",
+          "Sleep for {}ms as there are still incoming queries (no query time: {}ms is smaller than the threshold: "
+              + "{}ms)",
           sleepTimeMs, noQueryTimeMs, noQueryThresholdMs);
       try {
         Thread.sleep(sleepTimeMs);
@@ -705,5 +728,24 @@ public abstract class BaseServerStarter implements ServiceStartable {
     InstanceConfig instanceConfig = helixAdmin.getInstanceConfig(helixClusterName, instanceId);
     instanceConfig.getRecord().setMapField(Helix.Instance.SYSTEM_RESOURCE_INFO_KEY, systemResourceMap);
     helixAdmin.setInstanceConfig(helixClusterName, instanceId, instanceConfig);
+  }
+
+  /**
+   * Initialize the components to download segments from deep store. They used to be
+   * initialized in SegmentFetcherAndLoader, which has been removed to consolidate
+   * segment download functionality for both Offline and Realtime tables. So those
+   * components are initialized where SegmentFetcherAndLoader was initialized.
+   */
+  private void initSegmentFetcher(PinotConfiguration config)
+      throws Exception {
+    PinotConfiguration pinotFSConfig = config.subset(CommonConstants.Server.PREFIX_OF_CONFIG_OF_PINOT_FS_FACTORY);
+    PinotFSFactory.init(pinotFSConfig);
+
+    PinotConfiguration segmentFetcherFactoryConfig =
+        config.subset(CommonConstants.Server.PREFIX_OF_CONFIG_OF_SEGMENT_FETCHER_FACTORY);
+    SegmentFetcherFactory.init(segmentFetcherFactoryConfig);
+
+    PinotConfiguration pinotCrypterConfig = config.subset(CommonConstants.Server.PREFIX_OF_CONFIG_OF_PINOT_CRYPTER);
+    PinotCrypterFactory.init(pinotCrypterConfig);
   }
 }

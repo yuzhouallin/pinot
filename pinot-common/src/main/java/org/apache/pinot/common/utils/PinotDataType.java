@@ -20,8 +20,6 @@ package org.apache.pinot.common.utils;
 
 import java.sql.Timestamp;
 import java.util.Base64;
-import java.util.HashMap;
-import java.util.Map;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.pinot.common.utils.DataSchema.ColumnDataType;
 import org.apache.pinot.spi.data.FieldSpec;
@@ -765,6 +763,20 @@ public enum PinotDataType {
     }
   },
 
+  BOOLEAN_ARRAY {
+    @Override
+    public boolean[] convert(Object value, PinotDataType sourceType) {
+      return sourceType.toBooleanArray(value);
+    }
+  },
+
+  TIMESTAMP_ARRAY {
+    @Override
+    public Object convert(Object value, PinotDataType sourceType) {
+      return sourceType.toTimestampArray(value);
+    }
+  },
+
   STRING_ARRAY {
     @Override
     public String[] convert(Object value, PinotDataType sourceType) {
@@ -772,34 +784,14 @@ public enum PinotDataType {
     }
   },
 
+  BYTES_ARRAY {
+    @Override
+    public byte[][] convert(Object value, PinotDataType sourceType) {
+      return sourceType.toBytesArray(value);
+    }
+  },
+
   OBJECT_ARRAY;
-
-  // Mapping Java class type to PinotDataType, for SV and MV value separately.
-  // OBJECT and OBJECT_ARRAY are default type for unknown Java types.
-  private static final Map<Class<?>, PinotDataType> SINGLE_VALUE_TYPE_MAP = new HashMap<Class<?>, PinotDataType>() {{
-    put(Boolean.class, BOOLEAN);
-    put(Byte.class, BYTE);
-    put(Character.class, CHARACTER);
-    put(Short.class, SHORT);
-    put(Integer.class, INTEGER);
-    put(Long.class, LONG);
-    put(Float.class, FLOAT);
-    put(Double.class, DOUBLE);
-    put(Timestamp.class, TIMESTAMP);
-    put(String.class, STRING);
-    put(byte[].class, BYTES);
-  }};
-
-  private static final Map<Class<?>, PinotDataType> MULTI_VALUE_TYPE_MAP = new HashMap<Class<?>, PinotDataType>() {{
-    put(Byte.class, BYTE_ARRAY);
-    put(Character.class, CHARACTER_ARRAY);
-    put(Short.class, SHORT_ARRAY);
-    put(Integer.class, INTEGER_ARRAY);
-    put(Long.class, LONG_ARRAY);
-    put(Float.class, FLOAT_ARRAY);
-    put(Double.class, DOUBLE_ARRAY);
-    put(String.class, STRING_ARRAY);
-  }};
 
   /**
    * NOTE: override toInt(), toLong(), toFloat(), toDouble(), toBoolean(), toTimestamp(), toString(), and
@@ -1049,6 +1041,24 @@ public enum PinotDataType {
     }
   }
 
+  public byte[][] toBytesArray(Object value) {
+    if (value instanceof byte[][]) {
+      return (byte[][]) value;
+    }
+    if (isSingleValue()) {
+      return new byte[][]{toBytes(value)};
+    } else {
+      Object[] valueArray = toObjectArray(value);
+      int length = valueArray.length;
+      byte[][] bytesArray = new byte[length][];
+      PinotDataType singleValueType = getSingleValueType();
+      for (int i = 0; i < length; i++) {
+        bytesArray[i] = singleValueType.toBytes(valueArray[i]);
+      }
+      return bytesArray;
+    }
+  }
+
   private static Object[] toObjectArray(Object array) {
     Class<?> componentType = array.getClass().getComponentType();
     if (componentType.isPrimitive()) {
@@ -1067,6 +1077,42 @@ public enum PinotDataType {
       throw new UnsupportedOperationException("Unsupported primitive array type: " + componentType);
     } else {
       return (Object[]) array;
+    }
+  }
+
+  public boolean[] toBooleanArray(Object value) {
+    if (value instanceof boolean[]) {
+      return (boolean[]) value;
+    }
+    if (isSingleValue()) {
+      return new boolean[] {toBoolean(value)};
+    } else {
+      Object[] valueArray = toObjectArray(value);
+      int length = valueArray.length;
+      boolean[] booleanArray = new boolean[length];
+      PinotDataType singleValueType = getSingleValueType();
+      for (int i = 0; i < length; i++) {
+        booleanArray[i] = singleValueType.toBoolean(valueArray[i]);
+      }
+      return booleanArray;
+    }
+  }
+
+  public Timestamp[] toTimestampArray(Object value) {
+    if (value instanceof Timestamp[]) {
+      return (Timestamp[]) value;
+    }
+    if (isSingleValue()) {
+      return new Timestamp[] {toTimestamp(value)};
+    } else {
+      Object[] valueArray = toObjectArray(value);
+      int length = valueArray.length;
+      Timestamp[] booleanArray = new Timestamp[length];
+      PinotDataType singleValueType = getSingleValueType();
+      for (int i = 0; i < length; i++) {
+        booleanArray[i] = singleValueType.toTimestamp(valueArray[i]);
+      }
+      return booleanArray;
     }
   }
 
@@ -1111,21 +1157,91 @@ public enum PinotDataType {
         return DOUBLE;
       case STRING_ARRAY:
         return STRING;
+      case BYTES_ARRAY:
+        return BYTES;
       case OBJECT_ARRAY:
         return OBJECT;
+      case BOOLEAN_ARRAY:
+        return BOOLEAN;
+      case TIMESTAMP_ARRAY:
+        return TIMESTAMP;
       default:
         throw new IllegalStateException("There is no single-value type for " + this);
     }
   }
 
   public static PinotDataType getSingleValueType(Class<?> cls) {
-    PinotDataType pdt = SINGLE_VALUE_TYPE_MAP.get(cls);
-    return (pdt != null) ? pdt : OBJECT;
+    if (cls == Integer.class) {
+      return INTEGER;
+    }
+    if (cls == Long.class) {
+      return LONG;
+    }
+    if (cls == Float.class) {
+      return FLOAT;
+    }
+    if (cls == Double.class) {
+      return DOUBLE;
+    }
+    if (cls == String.class) {
+      return STRING;
+    }
+    if (cls == byte[].class) {
+      return BYTES;
+    }
+    if (cls == Boolean.class) {
+      return BOOLEAN;
+    }
+    if (cls == Timestamp.class) {
+      return TIMESTAMP;
+    }
+    if (cls == Byte.class) {
+      return BYTE;
+    }
+    if (cls == Character.class) {
+      return CHARACTER;
+    }
+    if (cls == Short.class) {
+      return SHORT;
+    }
+    return OBJECT;
   }
 
   public static PinotDataType getMultiValueType(Class<?> cls) {
-    PinotDataType pdt = MULTI_VALUE_TYPE_MAP.get(cls);
-    return (pdt != null) ? pdt : OBJECT_ARRAY;
+    if (cls == Integer.class) {
+      return INTEGER_ARRAY;
+    }
+    if (cls == Long.class) {
+      return LONG_ARRAY;
+    }
+    if (cls == Float.class) {
+      return FLOAT_ARRAY;
+    }
+    if (cls == Double.class) {
+      return DOUBLE_ARRAY;
+    }
+    if (cls == String.class) {
+      return STRING_ARRAY;
+    }
+    if (cls == Byte.class) {
+      return BYTE_ARRAY;
+    }
+    if (cls == Character.class) {
+      return CHARACTER_ARRAY;
+    }
+    if (cls == Short.class) {
+      return SHORT_ARRAY;
+    }
+    if (cls == byte[].class) {
+      return BYTES_ARRAY;
+    }
+    if (cls == Boolean.class) {
+      return BOOLEAN_ARRAY;
+    }
+    if (cls == Timestamp.class) {
+      return TIMESTAMP_ARRAY;
+    }
+    return OBJECT_ARRAY;
   }
 
   private static int anyToInt(Object val) {
@@ -1147,7 +1263,6 @@ public enum PinotDataType {
   /**
    * Returns the {@link PinotDataType} for the given {@link FieldSpec} for data ingestion purpose. Returns object array
    * type for multi-valued types.
-   * TODO: Add MV support for BOOLEAN, TIMESTAMP, BYTES
    */
   public static PinotDataType getPinotDataTypeForIngestion(FieldSpec fieldSpec) {
     DataType dataType = fieldSpec.getDataType();
@@ -1161,17 +1276,9 @@ public enum PinotDataType {
       case DOUBLE:
         return fieldSpec.isSingleValueField() ? DOUBLE : DOUBLE_ARRAY;
       case BOOLEAN:
-        if (fieldSpec.isSingleValueField()) {
-          return BOOLEAN;
-        } else {
-          throw new IllegalStateException("There is no multi-value type for BOOLEAN");
-        }
+        return fieldSpec.isSingleValueField() ? BOOLEAN : BOOLEAN_ARRAY;
       case TIMESTAMP:
-        if (fieldSpec.isSingleValueField()) {
-          return TIMESTAMP;
-        } else {
-          throw new IllegalStateException("There is no multi-value type for TIMESTAMP");
-        }
+        return fieldSpec.isSingleValueField() ? TIMESTAMP : TIMESTAMP_ARRAY;
       case JSON:
         if (fieldSpec.isSingleValueField()) {
           return JSON;
@@ -1181,11 +1288,7 @@ public enum PinotDataType {
       case STRING:
         return fieldSpec.isSingleValueField() ? STRING : STRING_ARRAY;
       case BYTES:
-        if (fieldSpec.isSingleValueField()) {
-          return BYTES;
-        } else {
-          throw new IllegalStateException("There is no multi-value type for BYTES");
-        }
+        return fieldSpec.isSingleValueField() ? BYTES : BYTES_ARRAY;
       default:
         throw new UnsupportedOperationException(
             "Unsupported data type: " + dataType + " in field: " + fieldSpec.getName());

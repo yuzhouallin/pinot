@@ -20,7 +20,6 @@ package org.apache.pinot.segment.spi.partition;
 
 import java.util.HashMap;
 import java.util.Map;
-import javax.annotation.Nonnull;
 
 
 /**
@@ -65,8 +64,9 @@ public class PartitionFunctionFactory {
    */
   // TODO: introduce a way to inject custom partition function
   // a custom partition function could be used in the realtime stream partitioning or offline segment partitioning.
-  // The PartitionFunctionFactory should be able to support these default implementations, as well as instantiate based on config
-  public static PartitionFunction getPartitionFunction(@Nonnull String functionName, int numPartitions) {
+  // The PartitionFunctionFactory should be able to support these default implementations, as well as instantiate
+  // based on config
+  public static PartitionFunction getPartitionFunction(String functionName, int numPartitions) {
     PartitionFunctionType function = PartitionFunctionType.fromString(functionName);
     switch (function) {
       case Modulo:

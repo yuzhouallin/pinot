@@ -97,7 +97,7 @@ public class BrokerReduceService {
     }
 
     String[] columnNames = resultTable.getDataSchema().getColumnNames();
-    List<ExpressionContext> selectExpressions = queryContext.getSelectExpressions();
+    List<ExpressionContext> selectExpressions = getSelectExpressions(queryContext.getSelectExpressions());
     int numSelectExpressions = selectExpressions.size();
     // For query like `SELECT *`, we skip alias update.
     if (columnNames.length != numSelectExpressions) {
@@ -111,9 +111,18 @@ public class BrokerReduceService {
     }
   }
 
+  private static List<ExpressionContext> getSelectExpressions(List<ExpressionContext> selectExpressions) {
+    // NOTE: For DISTINCT queries, need to extract the arguments as the SELECT expressions
+    if (selectExpressions.size() == 1 && selectExpressions.get(0).getType() == ExpressionContext.Type.FUNCTION
+        && selectExpressions.get(0).getFunction().getFunctionName().equals("distinct")) {
+      return selectExpressions.get(0).getFunction().getArguments();
+    }
+    return selectExpressions;
+  }
+
   public BrokerResponseNative reduceOnDataTable(BrokerRequest brokerRequest,
       Map<ServerRoutingInstance, DataTable> dataTableMap, long reduceTimeOutMs, @Nullable BrokerMetrics brokerMetrics) {
-    if (dataTableMap.size() == 0) {
+    if (dataTableMap.isEmpty()) {
       // Empty response.
       return BrokerResponseNative.empty();
     }
@@ -252,13 +261,14 @@ public class BrokerReduceService {
     String rawTableName = TableNameBuilder.extractRawTableName(tableName);
     if (brokerMetrics != null) {
       brokerMetrics.addMeteredTableValue(rawTableName, BrokerMeter.DOCUMENTS_SCANNED, numDocsScanned);
-      brokerMetrics
-          .addMeteredTableValue(rawTableName, BrokerMeter.ENTRIES_SCANNED_IN_FILTER, numEntriesScannedInFilter);
-      brokerMetrics
-          .addMeteredTableValue(rawTableName, BrokerMeter.ENTRIES_SCANNED_POST_FILTER, numEntriesScannedPostFilter);
-      brokerMetrics.addTimedTableValue(rawTableName, BrokerTimer.OFFLINE_THREAD_CPU_TIME_NS, offlineThreadCpuTimeNs, TimeUnit.NANOSECONDS);
-      brokerMetrics
-          .addTimedTableValue(rawTableName, BrokerTimer.REALTIME_THREAD_CPU_TIME_NS, realtimeThreadCpuTimeNs, TimeUnit.NANOSECONDS);
+      brokerMetrics.addMeteredTableValue(rawTableName, BrokerMeter.ENTRIES_SCANNED_IN_FILTER,
+          numEntriesScannedInFilter);
+      brokerMetrics.addMeteredTableValue(rawTableName, BrokerMeter.ENTRIES_SCANNED_POST_FILTER,
+          numEntriesScannedPostFilter);
+      brokerMetrics.addTimedTableValue(rawTableName, BrokerTimer.OFFLINE_THREAD_CPU_TIME_NS, offlineThreadCpuTimeNs,
+          TimeUnit.NANOSECONDS);
+      brokerMetrics.addTimedTableValue(rawTableName, BrokerTimer.REALTIME_THREAD_CPU_TIME_NS, realtimeThreadCpuTimeNs,
+          TimeUnit.NANOSECONDS);
       if (numConsumingSegmentsProcessed > 0 && minConsumingFreshnessTimeMs > 0) {
         brokerMetrics.addTimedTableValue(rawTableName, BrokerTimer.FRESHNESS_LAG_MS,
             System.currentTimeMillis() - minConsumingFreshnessTimeMs, TimeUnit.MILLISECONDS);

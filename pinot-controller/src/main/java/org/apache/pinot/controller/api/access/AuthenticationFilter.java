@@ -53,7 +53,7 @@ public class AuthenticationFilter implements ContainerRequestFilter {
   private static final Logger LOGGER = LoggerFactory.getLogger(ContainerRequestContext.class);
 
   private static final Set<String> UNPROTECTED_PATHS =
-      new HashSet<>(Arrays.asList("", "help", "auth/info", "auth/verify"));
+      new HashSet<>(Arrays.asList("", "help", "auth/info", "auth/verify", "health"));
 
   @Inject
   Provider<Request> _requestProvider;
