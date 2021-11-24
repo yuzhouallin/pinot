@@ -47,7 +47,7 @@ public class NativeFSTIndexCreator implements TextIndexCreator {
    * @throws IOException
    */
   public NativeFSTIndexCreator(File indexDir, String columnName, String[] sortedEntries) {
-    _fstIndexFile = new File(indexDir, columnName + V1Constants.Indexes.NATIVE_FST_INDEX_FILE_EXTENSION);
+    _fstIndexFile = new File(indexDir, columnName + V1Constants.Indexes.FST_INDEX_FILE_EXTENSION);
 
     _fstBuilder = new FSTBuilder();
     _dictId = 0;
@@ -63,6 +63,11 @@ public class NativeFSTIndexCreator implements TextIndexCreator {
   public void add(String document) {
     _fstBuilder.add(document.getBytes(), 0, document.length(), _dictId);
     _dictId++;
+  }
+
+  @Override
+  public void add(String[] document, int length) {
+    throw new UnsupportedOperationException("Multiple values not supported");
   }
 
   @Override

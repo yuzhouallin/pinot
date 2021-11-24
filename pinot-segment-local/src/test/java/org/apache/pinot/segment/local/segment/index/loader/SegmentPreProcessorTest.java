@@ -32,7 +32,6 @@ import java.util.Map;
 import java.util.Set;
 import org.apache.commons.configuration.PropertiesConfiguration;
 import org.apache.commons.io.FileUtils;
-import org.apache.pinot.segment.local.loader.LocalSegmentDirectoryLoader;
 import org.apache.pinot.segment.local.segment.creator.SegmentTestUtils;
 import org.apache.pinot.segment.local.segment.creator.impl.SegmentCreationDriverFactory;
 import org.apache.pinot.segment.local.segment.index.converter.SegmentV1V2ToV3FormatConverter;
@@ -44,6 +43,7 @@ import org.apache.pinot.segment.spi.creator.SegmentIndexCreationDriver;
 import org.apache.pinot.segment.spi.creator.SegmentVersion;
 import org.apache.pinot.segment.spi.index.creator.H3IndexConfig;
 import org.apache.pinot.segment.spi.index.metadata.SegmentMetadataImpl;
+import org.apache.pinot.segment.spi.loader.SegmentDirectoryLoaderContext;
 import org.apache.pinot.segment.spi.loader.SegmentDirectoryLoaderRegistry;
 import org.apache.pinot.segment.spi.store.ColumnIndexType;
 import org.apache.pinot.segment.spi.store.SegmentDirectory;
@@ -85,6 +85,8 @@ public class SegmentPreProcessorTest {
   private static final String EXISTING_STRING_COL_DICT = "column5";
   private static final String NEWLY_ADDED_STRING_COL_RAW = "newTextColRaw";
   private static final String NEWLY_ADDED_STRING_COL_DICT = "newTextColDict";
+  private static final String NEWLY_ADDED_STRING_MV_COL_RAW = "newTextMVColRaw";
+  private static final String NEWLY_ADDED_STRING_MV_COL_DICT = "newTextMVColDict";
 
   // For create fst index tests
   private static final String NEWLY_ADDED_FST_COL_DICT = "newFSTColDict";
@@ -125,7 +127,7 @@ public class SegmentPreProcessorTest {
     FileUtils.deleteQuietly(INDEX_DIR);
 
     Map<String, Object> props = new HashMap<>();
-    props.put(LocalSegmentDirectoryLoader.READ_MODE_KEY, ReadMode.mmap.toString());
+    props.put(IndexLoadingConfig.READ_MODE_KEY, ReadMode.mmap.toString());
     _configuration = new PinotConfiguration(props);
 
     // We specify two columns without inverted index ('column1', 'column13'), one non-existing column ('noSuchColumn')
@@ -214,8 +216,10 @@ public class SegmentPreProcessorTest {
       throws Exception {
     Set<String> textIndexColumns = new HashSet<>();
     textIndexColumns.add(NEWLY_ADDED_STRING_COL_RAW);
+    textIndexColumns.add(NEWLY_ADDED_STRING_MV_COL_RAW);
     _indexLoadingConfig.setTextIndexColumns(textIndexColumns);
     _indexLoadingConfig.getNoDictionaryColumns().add(NEWLY_ADDED_STRING_COL_RAW);
+    _indexLoadingConfig.getNoDictionaryColumns().add(NEWLY_ADDED_STRING_MV_COL_RAW);
 
     // Create a segment in V3, add a new raw column with text index enabled
     constructV3Segment();
@@ -224,6 +228,8 @@ public class SegmentPreProcessorTest {
     // should be null since column does not exist in the schema
     assertNull(columnMetadata);
     checkTextIndexCreation(NEWLY_ADDED_STRING_COL_RAW, 1, 1, _newColumnsSchemaWithText, true, true, true, 4);
+    checkTextIndexCreation(NEWLY_ADDED_STRING_MV_COL_RAW, 1, 1, _newColumnsSchemaWithText, true, true, false, 4, false,
+        1);
 
     // Create a segment in V1, add a new raw column with text index enabled
     constructV1Segment();
@@ -243,14 +249,16 @@ public class SegmentPreProcessorTest {
     _indexLoadingConfig.getNoDictionaryColumns().add(EXISTING_STRING_COL_RAW);
     constructV3Segment();
     SegmentDirectory segmentDirectory =
-        SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader().load(_indexDir.toURI(), _configuration);
+        SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+            .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
     SegmentPreProcessor v3Processor =
         new SegmentPreProcessor(segmentDirectory, _indexLoadingConfig, _newColumnsSchemaWithFST);
     expectThrows(UnsupportedOperationException.class, () -> v3Processor.process());
 
     constructV1Segment();
     segmentDirectory =
-        SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader().load(_indexDir.toURI(), _configuration);
+        SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+            .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
     SegmentPreProcessor v1Processor =
         new SegmentPreProcessor(segmentDirectory, _indexLoadingConfig, _newColumnsSchemaWithFST);
     expectThrows(UnsupportedOperationException.class, () -> v1Processor.process());
@@ -303,6 +311,7 @@ public class SegmentPreProcessorTest {
       throws Exception {
     Set<String> textIndexColumns = new HashSet<>();
     textIndexColumns.add(NEWLY_ADDED_STRING_COL_DICT);
+    textIndexColumns.add(NEWLY_ADDED_STRING_MV_COL_DICT);
     _indexLoadingConfig.setTextIndexColumns(textIndexColumns);
 
     // Create a segment in V3, add a new dict encoded column with text index enabled
@@ -312,6 +321,9 @@ public class SegmentPreProcessorTest {
     // should be null since column does not exist in the schema
     assertNull(columnMetadata);
     checkTextIndexCreation(NEWLY_ADDED_STRING_COL_DICT, 1, 1, _newColumnsSchemaWithText, true, true, true, 4);
+
+    checkTextIndexCreation(NEWLY_ADDED_STRING_MV_COL_DICT, 1, 1, _newColumnsSchemaWithText, true, true, false, 4, false,
+        1);
 
     // Create a segment in V1, add a new dict encoded column with text index enabled
     constructV1Segment();
@@ -385,39 +397,49 @@ public class SegmentPreProcessorTest {
       boolean isSorted, int dictionaryElementSize)
       throws Exception {
     checkIndexCreation(ColumnIndexType.FST_INDEX, column, cardinality, bits, schema, isAutoGenerated, true, isSorted,
-        dictionaryElementSize);
+        dictionaryElementSize, true, 0);
   }
 
   private void checkTextIndexCreation(String column, int cardinality, int bits, Schema schema, boolean isAutoGenerated,
       boolean hasDictionary, boolean isSorted, int dictionaryElementSize)
       throws Exception {
     checkIndexCreation(ColumnIndexType.TEXT_INDEX, column, cardinality, bits, schema, isAutoGenerated, hasDictionary,
-        isSorted, dictionaryElementSize);
+        isSorted, dictionaryElementSize, true, 0);
+  }
+
+  private void checkTextIndexCreation(String column, int cardinality, int bits, Schema schema, boolean isAutoGenerated,
+      boolean hasDictionary, boolean isSorted, int dictionaryElementSize, boolean isSingleValue,
+      int maxNumberOfMultiValues)
+      throws Exception {
+    checkIndexCreation(ColumnIndexType.TEXT_INDEX, column, cardinality, bits, schema, isAutoGenerated, hasDictionary,
+        isSorted, dictionaryElementSize, isSingleValue, maxNumberOfMultiValues);
   }
 
   private void checkIndexCreation(ColumnIndexType indexType, String column, int cardinality, int bits, Schema schema,
-      boolean isAutoGenerated, boolean hasDictionary, boolean isSorted, int dictionaryElementSize)
+      boolean isAutoGenerated, boolean hasDictionary, boolean isSorted, int dictionaryElementSize,
+      boolean isSingleValued, int maxNumberOfMultiValues)
       throws Exception {
 
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, _indexLoadingConfig, schema)) {
       processor.process();
       SegmentMetadataImpl segmentMetadata = new SegmentMetadataImpl(_indexDir);
       ColumnMetadata columnMetadata = segmentMetadata.getColumnMetadataFor(column);
-      assertEquals(columnMetadata.getFieldSpec(), new DimensionFieldSpec(column, DataType.STRING, true));
+      assertEquals(columnMetadata.getFieldSpec(), new DimensionFieldSpec(column, DataType.STRING, isSingleValued));
       assertEquals(columnMetadata.getCardinality(), cardinality);
       assertEquals(columnMetadata.getTotalDocs(), 100000);
       assertEquals(columnMetadata.getBitsPerElement(), bits);
       assertEquals(columnMetadata.getColumnMaxLength(), dictionaryElementSize);
       assertEquals(columnMetadata.isSorted(), isSorted);
       assertEquals(columnMetadata.hasDictionary(), hasDictionary);
-      assertEquals(columnMetadata.getMaxNumberOfMultiValues(), 0);
+      assertEquals(columnMetadata.getMaxNumberOfMultiValues(), maxNumberOfMultiValues);
       assertEquals(columnMetadata.getTotalNumberOfEntries(), 100000);
       assertEquals(columnMetadata.isAutoGenerated(), isAutoGenerated);
 
-      try (SegmentDirectory segmentDirectory1 = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-          .load(_indexDir.toURI(), _configuration); SegmentDirectory.Reader reader = segmentDirectory1.createReader()) {
+      try (SegmentDirectory segmentDirectory1 = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+          .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
+          SegmentDirectory.Reader reader = segmentDirectory1.createReader()) {
         assertTrue(reader.hasIndexFor(column, indexType));
         assertTrue(reader.hasIndexFor(column, ColumnIndexType.FORWARD_INDEX));
         // if the text index is enabled on a new column with dictionary,
@@ -502,8 +524,9 @@ public class SegmentPreProcessorTest {
     // Create inverted index the first time.
     checkInvertedIndexCreation(false);
     long addedLength = 0L;
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration); SegmentDirectory.Reader reader = segmentDirectory.createReader()) {
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
+        SegmentDirectory.Reader reader = segmentDirectory.createReader()) {
       // 8 bytes overhead is for checking integrity of the segment.
       addedLength += reader.getIndexFor(COLUMN1_NAME, ColumnIndexType.INVERTED_INDEX).size() + 8;
       addedLength += reader.getIndexFor(COLUMN13_NAME, ColumnIndexType.INVERTED_INDEX).size() + 8;
@@ -524,8 +547,9 @@ public class SegmentPreProcessorTest {
 
   private void checkInvertedIndexCreation(boolean reCreate)
       throws Exception {
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration); SegmentDirectory.Reader reader = segmentDirectory.createReader()) {
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
+        SegmentDirectory.Reader reader = segmentDirectory.createReader()) {
       if (reCreate) {
         assertTrue(reader.hasIndexFor(COLUMN1_NAME, ColumnIndexType.INVERTED_INDEX));
         assertTrue(reader.hasIndexFor(COLUMN13_NAME, ColumnIndexType.INVERTED_INDEX));
@@ -539,14 +563,15 @@ public class SegmentPreProcessorTest {
       }
     }
 
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, _indexLoadingConfig, null)) {
       processor.process();
     }
 
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration); SegmentDirectory.Reader reader = segmentDirectory.createReader()) {
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
+        SegmentDirectory.Reader reader = segmentDirectory.createReader()) {
       assertTrue(reader.hasIndexFor(COLUMN1_NAME, ColumnIndexType.INVERTED_INDEX));
       assertTrue(reader.hasIndexFor(COLUMN13_NAME, ColumnIndexType.INVERTED_INDEX));
       assertTrue(reader.hasIndexFor(COLUMN7_NAME, ColumnIndexType.INVERTED_INDEX));
@@ -570,8 +595,8 @@ public class SegmentPreProcessorTest {
     // NEW_INT_SV_DIMENSION_COLUMN_NAME exists before processing but removed afterwards.
     SegmentMetadataImpl segmentMetadata = new SegmentMetadataImpl(_indexDir);
     assertNotNull(segmentMetadata.getColumnMetadataFor(NEW_INT_SV_DIMENSION_COLUMN_NAME));
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, _indexLoadingConfig,
             _newColumnsSchema3)) {
       processor.process();
@@ -614,8 +639,8 @@ public class SegmentPreProcessorTest {
     // NEW_INT_SV_DIMENSION_COLUMN_NAME exists before processing but removed afterwards.
     segmentMetadata = new SegmentMetadataImpl(_indexDir);
     assertNotNull(segmentMetadata.getColumnMetadataFor(NEW_INT_SV_DIMENSION_COLUMN_NAME));
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, _indexLoadingConfig,
             _newColumnsSchema3)) {
       processor.process();
@@ -642,8 +667,8 @@ public class SegmentPreProcessorTest {
   private void checkUpdateDefaultColumns()
       throws Exception {
     // Update default value.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, _indexLoadingConfig,
             _newColumnsSchema1)) {
       processor.process();
@@ -710,8 +735,9 @@ public class SegmentPreProcessorTest {
     assertEquals(columnMetadata.getMaxValue(), (int) originalColumnMetadata.getMaxValue() + 1);
 
     // Check dictionary and forward index exist.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration); SegmentDirectory.Reader reader = segmentDirectory.createReader()) {
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
+        SegmentDirectory.Reader reader = segmentDirectory.createReader()) {
       assertTrue(reader.hasIndexFor(NEW_INT_METRIC_COLUMN_NAME, ColumnIndexType.DICTIONARY));
       assertTrue(reader.hasIndexFor(NEW_INT_METRIC_COLUMN_NAME, ColumnIndexType.FORWARD_INDEX));
       assertTrue(reader.hasIndexFor(NEW_LONG_METRIC_COLUMN_NAME, ColumnIndexType.DICTIONARY));
@@ -731,8 +757,8 @@ public class SegmentPreProcessorTest {
     // Use the second schema and update default value again.
     // For the second schema, we changed the default value for column 'newIntMetric' to 2, and added default value
     // 'abcd' (keep the same length as 'null') to column 'newStringMVDimension'.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, _indexLoadingConfig,
             _newColumnsSchema2)) {
       processor.process();
@@ -761,8 +787,8 @@ public class SegmentPreProcessorTest {
     Iterator<String> keys = configuration.getKeys();
     while (keys.hasNext()) {
       String key = keys.next();
-      if (key.endsWith(V1Constants.MetadataKeys.Column.MIN_VALUE) || key
-          .endsWith(V1Constants.MetadataKeys.Column.MAX_VALUE)) {
+      if (key.endsWith(V1Constants.MetadataKeys.Column.MIN_VALUE) || key.endsWith(
+          V1Constants.MetadataKeys.Column.MAX_VALUE)) {
         configuration.clearProperty(key);
       }
     }
@@ -770,8 +796,8 @@ public class SegmentPreProcessorTest {
 
     IndexLoadingConfig indexLoadingConfig = new IndexLoadingConfig();
     indexLoadingConfig.setColumnMinMaxValueGeneratorMode(ColumnMinMaxValueGeneratorMode.NONE);
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, indexLoadingConfig, null)) {
       processor.process();
     }
@@ -787,8 +813,8 @@ public class SegmentPreProcessorTest {
     assertNull(metricColumnMetadata.getMaxValue());
 
     indexLoadingConfig.setColumnMinMaxValueGeneratorMode(ColumnMinMaxValueGeneratorMode.TIME);
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, indexLoadingConfig, null)) {
       processor.process();
     }
@@ -804,8 +830,8 @@ public class SegmentPreProcessorTest {
     assertNull(metricColumnMetadata.getMaxValue());
 
     indexLoadingConfig.setColumnMinMaxValueGeneratorMode(ColumnMinMaxValueGeneratorMode.NON_METRIC);
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, indexLoadingConfig, null)) {
       processor.process();
     }
@@ -821,8 +847,8 @@ public class SegmentPreProcessorTest {
     assertNull(metricColumnMetadata.getMaxValue());
 
     indexLoadingConfig.setColumnMinMaxValueGeneratorMode(ColumnMinMaxValueGeneratorMode.ALL);
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, indexLoadingConfig, null)) {
       processor.process();
     }
@@ -870,8 +896,8 @@ public class SegmentPreProcessorTest {
     assertFalse(bfFile.exists());
 
     // Create all kinds of indices.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, _indexLoadingConfig, null)) {
       processor.process();
     }
@@ -882,8 +908,8 @@ public class SegmentPreProcessorTest {
     assertTrue(bfFile.exists());
 
     // Remove all kinds of indices.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, new IndexLoadingConfig(), null)) {
       processor.process();
     }
@@ -907,8 +933,8 @@ public class SegmentPreProcessorTest {
 
     // There are a few indices initially. Remove them to prepare an initial state.
     long initFileSize = singleFileIndex.length();
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, new IndexLoadingConfig(), null)) {
       processor.process();
     }
@@ -926,15 +952,16 @@ public class SegmentPreProcessorTest {
     _indexLoadingConfig.setBloomFilterConfigs(ImmutableMap.of(strColumn, new BloomFilterConfig(0.1, 1024, true)));
 
     // Create all kinds of indices.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, _indexLoadingConfig, null)) {
       processor.process();
     }
 
     long addedLength = 0;
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration); SegmentDirectory.Reader reader = segmentDirectory.createReader()) {
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
+        SegmentDirectory.Reader reader = segmentDirectory.createReader()) {
       addedLength += reader.getIndexFor(strColumn, ColumnIndexType.INVERTED_INDEX).size() + 8;
       addedLength += reader.getIndexFor(strColumn, ColumnIndexType.RANGE_INDEX).size() + 8;
       addedLength += reader.getIndexFor(strColumn, ColumnIndexType.FST_INDEX).size() + 8;
@@ -944,8 +971,8 @@ public class SegmentPreProcessorTest {
     assertEquals(singleFileIndex.length(), initFileSize + addedLength);
 
     // Remove all kinds of indices, and size gets back initial size.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, new IndexLoadingConfig(), null)) {
       processor.process();
     }
@@ -958,8 +985,8 @@ public class SegmentPreProcessorTest {
     constructV1Segment();
 
     // Remove all indices and add the two derived columns for H3 and Json index.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, new IndexLoadingConfig(),
             _newColumnsSchemaWithH3Json)) {
       processor.process();
@@ -970,8 +997,8 @@ public class SegmentPreProcessorTest {
     assertNotNull(segmentMetadata.getColumnMetadataFor("newJsonCol"));
 
     _indexLoadingConfig = new IndexLoadingConfig();
-    _indexLoadingConfig
-        .setH3IndexConfigs(ImmutableMap.of("newH3Col", new H3IndexConfig(ImmutableMap.of("resolutions", "5"))));
+    _indexLoadingConfig.setH3IndexConfigs(
+        ImmutableMap.of("newH3Col", new H3IndexConfig(ImmutableMap.of("resolutions", "5"))));
     _indexLoadingConfig.setJsonIndexColumns(new HashSet<>(Collections.singletonList("newJsonCol")));
 
     // V1 use separate file for each column index.
@@ -982,8 +1009,8 @@ public class SegmentPreProcessorTest {
     assertFalse(jsFile.exists());
 
     // Create H3 and Json indices.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, _indexLoadingConfig, null)) {
       processor.process();
     }
@@ -991,8 +1018,8 @@ public class SegmentPreProcessorTest {
     assertTrue(jsFile.exists());
 
     // Remove H3 and Json indices.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, new IndexLoadingConfig(), null)) {
       processor.process();
     }
@@ -1013,8 +1040,8 @@ public class SegmentPreProcessorTest {
 
     // There are a few indices initially. Remove them to prepare an initial state.
     // Also use the schema with columns for H3 and Json index to add those columns.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, new IndexLoadingConfig(),
             _newColumnsSchemaWithH3Json)) {
       processor.process();
@@ -1025,28 +1052,29 @@ public class SegmentPreProcessorTest {
     long initFileSize = singleFileIndex.length();
 
     _indexLoadingConfig = new IndexLoadingConfig();
-    _indexLoadingConfig
-        .setH3IndexConfigs(ImmutableMap.of("newH3Col", new H3IndexConfig(ImmutableMap.of("resolutions", "5"))));
+    _indexLoadingConfig.setH3IndexConfigs(
+        ImmutableMap.of("newH3Col", new H3IndexConfig(ImmutableMap.of("resolutions", "5"))));
     _indexLoadingConfig.setJsonIndexColumns(new HashSet<>(Collections.singletonList("newJsonCol")));
 
     // Create H3 and Json indices.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, _indexLoadingConfig, null)) {
       processor.process();
     }
 
     long addedLength = 0;
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration); SegmentDirectory.Reader reader = segmentDirectory.createReader()) {
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
+        SegmentDirectory.Reader reader = segmentDirectory.createReader()) {
       addedLength += reader.getIndexFor("newH3Col", ColumnIndexType.H3_INDEX).size() + 8;
       addedLength += reader.getIndexFor("newJsonCol", ColumnIndexType.JSON_INDEX).size() + 8;
     }
     assertEquals(singleFileIndex.length(), initFileSize + addedLength);
 
     // Remove H3 and Json indices, and size gets back to initial.
-    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getLocalSegmentDirectoryLoader()
-        .load(_indexDir.toURI(), _configuration);
+    try (SegmentDirectory segmentDirectory = SegmentDirectoryLoaderRegistry.getDefaultSegmentDirectoryLoader()
+        .load(_indexDir.toURI(), new SegmentDirectoryLoaderContext(null, null, null, _configuration));
         SegmentPreProcessor processor = new SegmentPreProcessor(segmentDirectory, new IndexLoadingConfig(), null)) {
       processor.process();
     }

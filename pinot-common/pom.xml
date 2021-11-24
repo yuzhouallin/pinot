@@ -25,7 +25,7 @@
   <parent>
     <artifactId>pinot</artifactId>
     <groupId>org.apache.pinot</groupId>
-    <version>0.9.0-SNAPSHOT</version>
+    <version>0.10.0-SNAPSHOT</version>
     <relativePath>..</relativePath>
   </parent>
   <artifactId>pinot-common</artifactId>
@@ -38,14 +38,6 @@
   <build>
     <!-- Antlr stuff -->
     <plugins>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-surefire-plugin</artifactId>
-        <configuration>
-          <forkCount>1</forkCount>
-          <reuseForks>true</reuseForks>
-        </configuration>
-      </plugin>
       <plugin>
         <artifactId>maven-jar-plugin</artifactId>
         <executions>
@@ -245,7 +237,18 @@
     </dependency>
     <dependency>
       <groupId>org.mockito</groupId>
-      <artifactId>mockito-core</artifactId>
+      <!--
+      NOTE: use `mockito-inline` here instead of `mockito-core`, as mockito-core does not support mocking static function:
+      ```
+      org.mockito.exceptions.base.MockitoException:
+      The used MockMaker SubclassByteBuddyMockMaker does not support the creation of static mocks
+
+      Mockito's inline mock maker supports static mocks based on the Instrumentation API.
+      You can simply enable this mock mode, by placing the 'mockito-inline' artifact where you are currently using 'mockito-core'.
+      Note that Mockito's inline mock maker is not supported on Android.
+      ```
+      -->
+      <artifactId>mockito-inline</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
