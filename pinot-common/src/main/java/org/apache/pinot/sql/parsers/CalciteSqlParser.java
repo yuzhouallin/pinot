@@ -31,6 +31,7 @@ import java.util.regex.Pattern;
 import org.apache.calcite.config.Lex;
 import org.apache.calcite.sql.SqlBasicCall;
 import org.apache.calcite.sql.SqlDataTypeSpec;
+import org.apache.calcite.sql.SqlExplain;
 import org.apache.calcite.sql.SqlIdentifier;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlLiteral;
@@ -95,8 +96,30 @@ public class CalciteSqlParser {
   private static final Pattern OPTIONS_REGEX_PATTEN =
       Pattern.compile("option\\s*\\(([^\\)]+)\\)", Pattern.CASE_INSENSITIVE);
 
+  /**
+   * Checks for the presence of semicolon in the sql query and modifies the query accordingly
+   *
+   * @param sql sql query
+   * @return sql query without semicolons
+   *
+   */
+  private static String removeTerminatingSemicolon(String sql) {
+    // trim all the leading and trailing whitespaces
+    sql = sql.trim();
+    int sqlLength = sql.length();
+
+    // Terminate the semicolon only if the last character of the query is semicolon
+    if (sql.charAt(sqlLength - 1) == ';') {
+      return sql.substring(0, sqlLength - 1);
+    }
+    return sql;
+  }
+
   public static PinotQuery compileToPinotQuery(String sql)
       throws SqlCompilationException {
+    // Removes the terminating semicolon if any
+    sql = removeTerminatingSemicolon(sql);
+
     // Extract OPTION statements from sql as Calcite Parser doesn't parse it.
     List<String> options = extractOptionsFromSql(sql);
     if (!options.isEmpty()) {
@@ -302,6 +325,12 @@ public class CalciteSqlParser {
       throw new SqlCompilationException("Caught exception while parsing query: " + sql, e);
     }
 
+    PinotQuery pinotQuery = new PinotQuery();
+    if (sqlNode instanceof SqlExplain) {
+      // Extract sql node for the query
+      sqlNode = ((SqlExplain) sqlNode).getExplicandum();
+      pinotQuery.setExplain(true);
+    }
     SqlSelect selectNode;
     if (sqlNode instanceof SqlOrderBy) {
       // Store order-by info into the select sql node
@@ -314,7 +343,6 @@ public class CalciteSqlParser {
       selectNode = (SqlSelect) sqlNode;
     }
 
-    PinotQuery pinotQuery = new PinotQuery();
     // SELECT
     if (selectNode.getModifierNode(SqlSelectKeyword.DISTINCT) != null) {
       // SELECT DISTINCT
