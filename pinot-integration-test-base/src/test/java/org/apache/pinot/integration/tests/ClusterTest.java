@@ -57,6 +57,7 @@ import org.apache.pinot.plugin.inputformat.avro.AvroRecordExtractor;
 import org.apache.pinot.plugin.inputformat.avro.AvroUtils;
 import org.apache.pinot.server.starter.helix.DefaultHelixStarterServerConfig;
 import org.apache.pinot.server.starter.helix.HelixServerStarter;
+import org.apache.pinot.spi.config.table.TableType;
 import org.apache.pinot.spi.data.readers.GenericRow;
 import org.apache.pinot.spi.data.readers.RecordExtractor;
 import org.apache.pinot.spi.env.PinotConfiguration;
@@ -317,6 +318,51 @@ public abstract class ClusterTest extends ControllerTest {
     _serverStarters = null;
   }
 
+  protected void restartServers(int numServers)
+      throws InterruptedException {
+    assertNotNull(_serverStarters, "Servers are not started");
+    for (HelixServerStarter helixServerStarter : _serverStarters) {
+      try {
+        helixServerStarter.stop();
+      } catch (Exception e) {
+        LOGGER.error("Encountered exception while stopping server {}", e.getMessage());
+      }
+    }
+    _serverStarters = null;
+
+    _serverStarters = new ArrayList<>(numServers);
+    String zkStr = getZkUrl();
+    int baseAdminApiPort = Server.DEFAULT_ADMIN_API_PORT;
+    int baseNettyPort = Helix.DEFAULT_SERVER_NETTY_PORT;
+    int baseGrpcPort = Server.DEFAULT_GRPC_PORT;
+    PinotConfiguration configuration = getDefaultServerConfiguration();
+    overrideServerConf(configuration);
+    try {
+      for (int i = 0; i < numServers; i++) {
+        configuration.setProperty(Helix.CONFIG_OF_CLUSTER_NAME, getHelixClusterName());
+        configuration.setProperty(Helix.CONFIG_OF_ZOOKEEPR_SERVER, zkStr);
+        configuration.setProperty(Server.CONFIG_OF_INSTANCE_DATA_DIR, Server.DEFAULT_INSTANCE_DATA_DIR + "-" + i);
+        configuration
+            .setProperty(Server.CONFIG_OF_INSTANCE_SEGMENT_TAR_DIR, Server.DEFAULT_INSTANCE_SEGMENT_TAR_DIR + "-" + i);
+        configuration.setProperty(Server.CONFIG_OF_ADMIN_API_PORT, baseAdminApiPort - i);
+        configuration.setProperty(Server.CONFIG_OF_NETTY_PORT, baseNettyPort + i);
+        if (configuration.getProperty(Server.CONFIG_OF_ENABLE_GRPC_SERVER, false)) {
+          configuration.setProperty(Server.CONFIG_OF_GRPC_PORT, baseGrpcPort + i);
+        }
+        configuration.setProperty(Server.CONFIG_OF_NETTY_PORT, baseNettyPort + i);
+        // Thread time measurement is disabled by default, enable it in integration tests.
+        // TODO: this can be removed when we eventually enable thread time measurement by default.
+        configuration.setProperty(Server.CONFIG_OF_ENABLE_THREAD_CPU_TIME_MEASUREMENT, true);
+        HelixServerStarter helixServerStarter = new HelixServerStarter();
+        helixServerStarter.init(configuration);
+        helixServerStarter.start();
+        _serverStarters.add(helixServerStarter);
+      }
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+  }
+
   protected void stopMinion() {
     assertNotNull(_minionStarter, "Minion is not started");
     try {
@@ -368,6 +414,53 @@ public abstract class ClusterTest extends ControllerTest {
               return uploadSegmentWithOnlyMetadata(tableName, uploadSegmentHttpURI, fileUploadDownloadClient,
                   segmentTarFile);
             }
+          }));
+        }
+        executorService.shutdown();
+        for (Future<Integer> future : futures) {
+          assertEquals((int) future.get(), HttpStatus.SC_OK);
+        }
+      }
+    }
+  }
+
+  /**
+   * tarDirPaths contains a list of directories that contain segment files. API uploads all segments inside the given
+   * list of directories to the cluster.
+   *
+   * @param tarDirPaths List of directories containing segments
+   */
+  protected void uploadSegments(String tableName, List<File> tarDirPaths, TableType tableType,
+      boolean enableParallelPushProtection)
+      throws Exception {
+    List<File> segmentTarFiles = new ArrayList<>();
+
+    for (File tarDir : tarDirPaths) {
+      Collections.addAll(segmentTarFiles, tarDir.listFiles());
+    }
+    assertNotNull(segmentTarFiles);
+    int numSegments = segmentTarFiles.size();
+    assertTrue(numSegments > 0);
+
+    URI uploadSegmentHttpURI = FileUploadDownloadClient.getUploadSegmentHttpURI(LOCAL_HOST, _controllerPort);
+    try (FileUploadDownloadClient fileUploadDownloadClient = new FileUploadDownloadClient()) {
+      if (numSegments == 1) {
+        File segmentTarFile = segmentTarFiles.get(0);
+        assertEquals(fileUploadDownloadClient
+                .uploadSegment(uploadSegmentHttpURI, segmentTarFile.getName(), segmentTarFile, tableName,
+                    tableType.OFFLINE, enableParallelPushProtection, true)
+                .getStatusCode(),
+            HttpStatus.SC_OK);
+      } else {
+        // Upload all segments in parallel
+        ExecutorService executorService = Executors.newFixedThreadPool(numSegments);
+        List<Future<Integer>> futures = new ArrayList<>(numSegments);
+        for (File segmentTarFile : segmentTarFiles) {
+          futures.add(executorService.submit(() -> {
+            return fileUploadDownloadClient
+                .uploadSegment(uploadSegmentHttpURI, segmentTarFile.getName(), segmentTarFile, tableName,
+                    tableType.OFFLINE, enableParallelPushProtection, true)
+                .getStatusCode();
           }));
         }
         executorService.shutdown();

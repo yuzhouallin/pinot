@@ -78,6 +78,7 @@ public class CommonConstants {
     public static final String LEAD_CONTROLLER_RESOURCE_ENABLED_KEY = "RESOURCE_ENABLED";
 
     public static final String ENABLE_CASE_INSENSITIVE_KEY = "enable.case.insensitive";
+    @Deprecated
     public static final String DEPRECATED_ENABLE_CASE_INSENSITIVE_KEY = "enable.case.insensitive.pql";
 
     public static final String DEFAULT_HYPERLOGLOG_LOG2M_KEY = "default.hyperloglog.log2m";
@@ -224,6 +225,10 @@ public class CommonConstants {
 
     public static final String BROKER_TLS_PREFIX = "pinot.broker.tls";
     public static final String BROKER_NETTYTLS_ENABLED = "pinot.broker.nettytls.enabled";
+    //Set to true to load all services tagged and compiled with hk2-metadata-generator. Default to False
+    public static final String BROKER_SERVICE_AUTO_DISCOVERY = "pinot.broker.service.auto.discovery";
+
+    public static final String DISABLE_GROOVY = "pinot.broker.disable.query.groovy";
 
     public static class Request {
       public static final String PQL = "pql";
@@ -403,6 +408,7 @@ public class CommonConstants {
     public static final String ACCESS_CONTROL_FACTORY_CLASS = "pinot.server.admin.access.control.factory.class";
     public static final String DEFAULT_ACCESS_CONTROL_FACTORY_CLASS =
         "org.apache.pinot.server.access.AllowAllAccessFactory";
+    public static final String PREFIX_OF_CONFIG_OF_ACCESS_CONTROL = "pinot.server.admin.access.control";
 
     public static final String CONFIG_OF_ENABLE_THREAD_CPU_TIME_MEASUREMENT =
         "pinot.server.instance.enableThreadCpuTimeMeasurement";
@@ -443,7 +449,9 @@ public class CommonConstants {
     public static final String METADATA_EVENT_OBSERVER_PREFIX = "metadata.event.notifier";
 
     // Config keys
-    public static final String CONFIG_OF_METRICS_PREFIX_KEY = "metricsPrefix";
+    public static final String CONFIG_OF_METRICS_PREFIX_KEY = "pinot.minion.metrics.prefix";
+    @Deprecated
+    public static final String DEPRECATED_CONFIG_OF_METRICS_PREFIX_KEY = "metricsPrefix";
     public static final String METRICS_REGISTRY_REGISTRATION_LISTENERS_KEY = "metricsRegistryRegistrationListeners";
     public static final String METRICS_CONFIG_PREFIX = "pinot.minion.metrics";
 
@@ -452,10 +460,20 @@ public class CommonConstants {
     public static final String DEFAULT_INSTANCE_BASE_DIR =
         System.getProperty("java.io.tmpdir") + File.separator + "PinotMinion";
     public static final String DEFAULT_INSTANCE_DATA_DIR = DEFAULT_INSTANCE_BASE_DIR + File.separator + "data";
-    public static final String PREFIX_OF_CONFIG_OF_PINOT_FS_FACTORY = "storage.factory";
-    public static final String PREFIX_OF_CONFIG_OF_SEGMENT_FETCHER_FACTORY = "segment.fetcher";
-    public static final String PREFIX_OF_CONFIG_OF_SEGMENT_UPLOADER = "segment.uploader";
-    public static final String PREFIX_OF_CONFIG_OF_PINOT_CRYPTER = "crypter";
+
+    // Add pinot.minion prefix on those configs to be consistent with configs of controller and server.
+    public static final String PREFIX_OF_CONFIG_OF_PINOT_FS_FACTORY = "pinot.minion.storage.factory";
+    public static final String PREFIX_OF_CONFIG_OF_SEGMENT_FETCHER_FACTORY = "pinot.minion.segment.fetcher";
+    public static final String PREFIX_OF_CONFIG_OF_SEGMENT_UPLOADER = "pinot.minion.segment.uploader";
+    public static final String PREFIX_OF_CONFIG_OF_PINOT_CRYPTER = "pinot.minion.crypter";
+    @Deprecated
+    public static final String DEPRECATED_PREFIX_OF_CONFIG_OF_PINOT_FS_FACTORY = "storage.factory";
+    @Deprecated
+    public static final String DEPRECATED_PREFIX_OF_CONFIG_OF_SEGMENT_FETCHER_FACTORY = "segment.fetcher";
+    @Deprecated
+    public static final String DEPRECATED_PREFIX_OF_CONFIG_OF_SEGMENT_UPLOADER = "segment.uploader";
+    @Deprecated
+    public static final String DEPRECATED_PREFIX_OF_CONFIG_OF_PINOT_CRYPTER = "crypter";
 
     /**
      * Service token for accessing protected controller APIs.
@@ -486,9 +504,9 @@ public class CommonConstants {
        */
       public enum CompletionMode {
         // default behavior - if the in memory segment in the non-winner server is equivalent to the committed
-        // segment, then build and
-        // replace, else download
-        DEFAULT, // non-winner servers always download the segment, never build it
+        // segment, then build and replace, else download
+        DEFAULT,
+        // non-winner servers always download the segment, never build it
         DOWNLOAD
       }
 

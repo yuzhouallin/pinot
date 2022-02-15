@@ -44,6 +44,7 @@ import org.apache.pinot.core.geospatial.transform.function.StGeomFromWKBFunction
 import org.apache.pinot.core.geospatial.transform.function.StGeometryTypeFunction;
 import org.apache.pinot.core.geospatial.transform.function.StPointFunction;
 import org.apache.pinot.core.geospatial.transform.function.StPolygonFunction;
+import org.apache.pinot.core.geospatial.transform.function.StWithinFunction;
 import org.apache.pinot.core.operator.transform.function.SingleParamMathTransformFunction.AbsTransformFunction;
 import org.apache.pinot.core.operator.transform.function.SingleParamMathTransformFunction.CeilTransformFunction;
 import org.apache.pinot.core.operator.transform.function.SingleParamMathTransformFunction.ExpTransformFunction;
@@ -130,7 +131,6 @@ public class TransformFunctionFactory {
           put(canonicalize(TransformFunctionType.AND.getName().toLowerCase()), AndOperatorTransformFunction.class);
           put(canonicalize(TransformFunctionType.OR.getName().toLowerCase()), OrOperatorTransformFunction.class);
 
-
           // geo functions
           // geo constructors
           put(canonicalize(TransformFunctionType.ST_GEOG_FROM_TEXT.getName().toLowerCase()),
@@ -157,9 +157,14 @@ public class TransformFunctionFactory {
           // geo relationship
           put(canonicalize(TransformFunctionType.ST_CONTAINS.getName().toLowerCase()), StContainsFunction.class);
           put(canonicalize(TransformFunctionType.ST_EQUALS.getName().toLowerCase()), StEqualsFunction.class);
+          put(canonicalize(TransformFunctionType.ST_WITHIN.getName().toLowerCase()), StWithinFunction.class);
 
           // geo indexing
           put(canonicalize(TransformFunctionType.GEOTOH3.getName().toLowerCase()), GeoToH3Function.class);
+
+          // tuple selection
+          put(canonicalize(TransformFunctionType.LEAST.getName().toLowerCase()), LeastTransformFunction.class);
+          put(canonicalize(TransformFunctionType.GREATEST.getName().toLowerCase()), GreatestTransformFunction.class);
         }
       };
 
@@ -263,7 +268,13 @@ public class TransformFunctionFactory {
     }
   }
 
-  private static String canonicalize(String functionName) {
+  /**
+   * Converts the transform function name into its canonical form
+   *
+   * @param functionName Name of the transform function
+   * @return canonicalized transform function name
+   */
+  public static String canonicalize(String functionName) {
     return StringUtils.remove(functionName, '_').toLowerCase();
   }
 }

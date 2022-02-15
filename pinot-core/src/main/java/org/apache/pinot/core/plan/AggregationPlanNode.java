@@ -18,17 +18,24 @@
  */
 package org.apache.pinot.core.plan;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pinot.common.request.context.ExpressionContext;
+import org.apache.pinot.common.request.context.FilterContext;
 import org.apache.pinot.core.common.Operator;
+import org.apache.pinot.core.operator.BaseOperator;
 import org.apache.pinot.core.operator.blocks.IntermediateResultsBlock;
 import org.apache.pinot.core.operator.filter.BaseFilterOperator;
+import org.apache.pinot.core.operator.filter.CombinedFilterOperator;
 import org.apache.pinot.core.operator.query.AggregationOperator;
 import org.apache.pinot.core.operator.query.DictionaryBasedAggregationOperator;
+import org.apache.pinot.core.operator.query.FilteredAggregationOperator;
 import org.apache.pinot.core.operator.query.MetadataBasedAggregationOperator;
 import org.apache.pinot.core.operator.transform.TransformOperator;
 import org.apache.pinot.core.query.aggregation.function.AggregationFunction;
@@ -50,6 +57,11 @@ import org.apache.pinot.segment.spi.index.startree.StarTreeV2;
  */
 @SuppressWarnings("rawtypes")
 public class AggregationPlanNode implements PlanNode {
+  private static final EnumSet<AggregationFunctionType> DICTIONARY_BASED_FUNCTIONS =
+      EnumSet.of(AggregationFunctionType.MIN, AggregationFunctionType.MAX, AggregationFunctionType.MINMAXRANGE,
+          AggregationFunctionType.DISTINCTCOUNT, AggregationFunctionType.SEGMENTPARTITIONEDDISTINCTCOUNT,
+          AggregationFunctionType.DISTINCTCOUNTSMARTHLL);
+
   private final IndexSegment _indexSegment;
   private final QueryContext _queryContext;
 
@@ -60,6 +72,99 @@ public class AggregationPlanNode implements PlanNode {
 
   @Override
   public Operator<IntermediateResultsBlock> run() {
+    assert _queryContext.getAggregationFunctions() != null;
+    return _queryContext.isHasFilteredAggregations() ? buildFilteredAggOperator() : buildNonFilteredAggOperator();
+  }
+
+  /**
+   * Build the operator to be used for filtered aggregations
+   */
+  private BaseOperator<IntermediateResultsBlock> buildFilteredAggOperator() {
+    int numTotalDocs = _indexSegment.getSegmentMetadata().getTotalDocs();
+    // Build the operator chain for the main predicate
+    Pair<FilterPlanNode, BaseFilterOperator> filterOperatorPair = buildFilterOperator(_queryContext.getFilter());
+    TransformOperator transformOperator = buildTransformOperatorForFilteredAggregates(filterOperatorPair.getRight());
+
+    return buildFilterOperatorInternal(filterOperatorPair.getRight(), transformOperator, numTotalDocs);
+  }
+
+  /**
+   * Build a FilteredAggregationOperator given the parameters.
+   * @param mainPredicateFilterOperator Filter operator corresponding to the main predicate
+   * @param mainTransformOperator Transform operator corresponding to the main predicate
+   * @param numTotalDocs Number of total docs
+   */
+  private BaseOperator<IntermediateResultsBlock> buildFilterOperatorInternal(
+      BaseFilterOperator mainPredicateFilterOperator, TransformOperator mainTransformOperator, int numTotalDocs) {
+    Map<FilterContext, Pair<List<AggregationFunction>, TransformOperator>> filterContextToAggFuncsMap = new HashMap<>();
+    List<AggregationFunction> nonFilteredAggregationFunctions = new ArrayList<>();
+    List<Pair<AggregationFunction, FilterContext>> aggregationFunctions =
+        _queryContext.getFilteredAggregationFunctions();
+
+    // For each aggregation function, check if the aggregation function is a filtered agg.
+    // If it is, populate the corresponding filter operator and corresponding transform operator
+    for (Pair<AggregationFunction, FilterContext> inputPair : aggregationFunctions) {
+      if (inputPair.getLeft() != null) {
+        FilterContext currentFilterExpression = inputPair.getRight();
+        if (filterContextToAggFuncsMap.get(currentFilterExpression) != null) {
+          filterContextToAggFuncsMap.get(currentFilterExpression).getLeft().add(inputPair.getLeft());
+          continue;
+        }
+        Pair<FilterPlanNode, BaseFilterOperator> pair = buildFilterOperator(currentFilterExpression);
+        BaseFilterOperator wrappedFilterOperator =
+            new CombinedFilterOperator(mainPredicateFilterOperator, pair.getRight());
+        TransformOperator newTransformOperator = buildTransformOperatorForFilteredAggregates(wrappedFilterOperator);
+        // For each transform operator, associate it with the underlying expression. This allows
+        // fetching the relevant TransformOperator when resolving blocks during aggregation
+        // execution
+        List<AggregationFunction> aggFunctionList = new ArrayList<>();
+        aggFunctionList.add(inputPair.getLeft());
+        filterContextToAggFuncsMap.put(currentFilterExpression, Pair.of(aggFunctionList, newTransformOperator));
+      } else {
+        nonFilteredAggregationFunctions.add(inputPair.getLeft());
+      }
+    }
+    List<Pair<AggregationFunction[], TransformOperator>> aggToTransformOpList = new ArrayList<>();
+    // Convert to array since FilteredAggregationOperator expects it
+    for (Pair<List<AggregationFunction>, TransformOperator> pair : filterContextToAggFuncsMap.values()) {
+      List<AggregationFunction> aggregationFunctionList = pair.getLeft();
+      if (aggregationFunctionList == null) {
+        throw new IllegalStateException("Null aggregation list seen");
+      }
+      aggToTransformOpList.add(Pair.of(aggregationFunctionList.toArray(new AggregationFunction[0]), pair.getRight()));
+    }
+    aggToTransformOpList.add(
+        Pair.of(nonFilteredAggregationFunctions.toArray(new AggregationFunction[0]), mainTransformOperator));
+
+    return new FilteredAggregationOperator(_queryContext.getAggregationFunctions(), aggToTransformOpList, numTotalDocs);
+  }
+
+  /**
+   * Build a filter operator from the given FilterContext.
+   *
+   * It returns the FilterPlanNode to allow reusing plan level components such as predicate
+   * evaluator map
+   */
+  private Pair<FilterPlanNode, BaseFilterOperator> buildFilterOperator(FilterContext filterContext) {
+    FilterPlanNode filterPlanNode = new FilterPlanNode(_indexSegment, _queryContext, filterContext);
+    return Pair.of(filterPlanNode, filterPlanNode.run());
+  }
+
+  private TransformOperator buildTransformOperatorForFilteredAggregates(BaseFilterOperator filterOperator) {
+    AggregationFunction[] aggregationFunctions = _queryContext.getAggregationFunctions();
+    Set<ExpressionContext> expressionsToTransform =
+        AggregationFunctionUtils.collectExpressionsToTransform(aggregationFunctions, null);
+
+    return new TransformPlanNode(_indexSegment, _queryContext, expressionsToTransform,
+        DocIdSetPlanNode.MAX_DOC_PER_CALL, filterOperator).run();
+  }
+
+  /**
+   * Processing workhorse for non filtered aggregates. Note that this code path is invoked only
+   * if the query has no filtered aggregates at all. If a query has mixed aggregates, filtered
+   * aggregates code will be invoked
+   */
+  public Operator<IntermediateResultsBlock> buildNonFilteredAggOperator() {
     assert _queryContext.getAggregationFunctions() != null;
 
     int numTotalDocs = _indexSegment.getSegmentMetadata().getTotalDocs();
@@ -130,16 +235,11 @@ public class AggregationPlanNode implements PlanNode {
 
   /**
    * Returns {@code true} if the given aggregations can be solved with dictionary, {@code false} otherwise.
-   * <p>Aggregations supported: MIN, MAX, MIN_MAX_RANGE, DISTINCT_COUNT, SEGMENT_PARTITIONED_DISTINCT_COUNT
    */
   private static boolean isFitForDictionaryBasedPlan(AggregationFunction[] aggregationFunctions,
       IndexSegment indexSegment) {
     for (AggregationFunction aggregationFunction : aggregationFunctions) {
-      AggregationFunctionType functionType = aggregationFunction.getType();
-      if (functionType != AggregationFunctionType.MIN && functionType != AggregationFunctionType.MAX
-          && functionType != AggregationFunctionType.MINMAXRANGE
-          && functionType != AggregationFunctionType.DISTINCTCOUNT
-          && functionType != AggregationFunctionType.SEGMENTPARTITIONEDDISTINCTCOUNT) {
+      if (!DICTIONARY_BASED_FUNCTIONS.contains(aggregationFunction.getType())) {
         return false;
       }
       ExpressionContext argument = (ExpressionContext) aggregationFunction.getInputExpressions().get(0);

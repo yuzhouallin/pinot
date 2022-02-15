@@ -24,6 +24,9 @@ import java.io.InputStream;
 import java.io.Serializable;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.file.FileSystems;
+import java.nio.file.PathMatcher;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -39,10 +42,12 @@ import org.apache.pinot.common.utils.FileUploadDownloadClient;
 import org.apache.pinot.common.utils.SimpleHttpResponse;
 import org.apache.pinot.common.utils.TarGzCompressionUtils;
 import org.apache.pinot.segment.spi.V1Constants;
+import org.apache.pinot.spi.config.table.TableType;
 import org.apache.pinot.spi.filesystem.PinotFS;
 import org.apache.pinot.spi.filesystem.PinotFSFactory;
 import org.apache.pinot.spi.ingestion.batch.spec.Constants;
 import org.apache.pinot.spi.ingestion.batch.spec.PinotClusterSpec;
+import org.apache.pinot.spi.ingestion.batch.spec.PushJobSpec;
 import org.apache.pinot.spi.ingestion.batch.spec.SegmentGenerationJobSpec;
 import org.apache.pinot.spi.utils.retry.AttemptsExceededException;
 import org.apache.pinot.spi.utils.retry.RetriableOperationException;
@@ -88,6 +93,7 @@ public class SegmentPushUtils implements Serializable {
   public static void pushSegments(SegmentGenerationJobSpec spec, PinotFS fileSystem, List<String> tarFilePaths)
       throws RetriableOperationException, AttemptsExceededException {
     String tableName = spec.getTableSpec().getTableName();
+    TableType tableType = tableName.endsWith("_" + TableType.REALTIME.name()) ? TableType.REALTIME : TableType.OFFLINE;
     boolean cleanUpOutputDir = spec.isCleanUpOutputDir();
     LOGGER.info("Start pushing segments: {}... to locations: {} for table {}",
         Arrays.toString(tarFilePaths.subList(0, Math.min(5, tarFilePaths.size())).toArray()),
@@ -116,11 +122,10 @@ public class SegmentPushUtils implements Serializable {
         }
         RetryPolicies.exponentialBackoffRetryPolicy(attempts, retryWaitMs, 5).attempt(() -> {
           try (InputStream inputStream = fileSystem.open(tarFileURI)) {
-            SimpleHttpResponse response = FILE_UPLOAD_DOWNLOAD_CLIENT
-                .uploadSegment(FileUploadDownloadClient.getUploadSegmentURI(controllerURI), segmentName, inputStream,
-                    FileUploadDownloadClient.makeAuthHeader(spec.getAuthToken()),
-                    FileUploadDownloadClient.makeTableParam(tableName),
-                    FileUploadDownloadClient.DEFAULT_SOCKET_TIMEOUT_MS);
+            SimpleHttpResponse response =
+                FILE_UPLOAD_DOWNLOAD_CLIENT.uploadSegment(FileUploadDownloadClient.getUploadSegmentURI(controllerURI),
+                    segmentName, inputStream, FileUploadDownloadClient.makeAuthHeader(spec.getAuthToken()),
+                    FileUploadDownloadClient.makeTableParam(tableName), tableName, tableType);
             LOGGER.info("Response for pushing table {} segment {} to location {} - {}: {}", tableName, segmentName,
                 controllerURI, response.getStatusCode(), response.getResponse());
             return true;
@@ -133,9 +138,8 @@ public class SegmentPushUtils implements Serializable {
               return false;
             } else {
               // Permanent exception
-              LOGGER
-                  .error("Caught permanent exception while pushing table: {} segment: {} to {}, won't retry", tableName,
-                      segmentName, controllerURI, e);
+              LOGGER.error("Caught permanent exception while pushing table: {} segment: {} to {}, won't retry",
+                  tableName, segmentName, controllerURI, e);
               throw e;
             }
           } finally {
@@ -287,13 +291,25 @@ public class SegmentPushUtils implements Serializable {
     }
   }
 
-  public static Map<String, String> getSegmentUriToTarPathMap(URI outputDirURI, String uriPrefix, String uriSuffix,
+  public static Map<String, String> getSegmentUriToTarPathMap(URI outputDirURI, PushJobSpec pushSpec,
       String[] files) {
     Map<String, String> segmentUriToTarPathMap = new HashMap<>();
+    PathMatcher pushFilePathMatcher = null;
+    if (pushSpec.getPushFileNamePattern() != null) {
+      pushFilePathMatcher = FileSystems.getDefault().getPathMatcher(pushSpec.getPushFileNamePattern());
+    }
+
     for (String file : files) {
+      if (pushFilePathMatcher != null) {
+        if (!pushFilePathMatcher.matches(Paths.get(file))) {
+          continue;
+        }
+      }
+
       URI uri = URI.create(file);
       if (uri.getPath().endsWith(Constants.TAR_GZ_FILE_EXT)) {
-        URI updatedURI = SegmentPushUtils.generateSegmentTarURI(outputDirURI, uri, uriPrefix, uriSuffix);
+        URI updatedURI = SegmentPushUtils.generateSegmentTarURI(outputDirURI, uri, pushSpec.getSegmentUriPrefix(),
+            pushSpec.getSegmentUriSuffix());
         segmentUriToTarPathMap.put(updatedURI.toString(), file);
       }
     }

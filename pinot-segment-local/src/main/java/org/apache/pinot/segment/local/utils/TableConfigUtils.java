@@ -53,12 +53,14 @@ import org.apache.pinot.spi.config.table.UpsertConfig;
 import org.apache.pinot.spi.config.table.ingestion.BatchIngestionConfig;
 import org.apache.pinot.spi.config.table.ingestion.FilterConfig;
 import org.apache.pinot.spi.config.table.ingestion.IngestionConfig;
+import org.apache.pinot.spi.config.table.ingestion.StreamIngestionConfig;
 import org.apache.pinot.spi.config.table.ingestion.TransformConfig;
 import org.apache.pinot.spi.data.FieldSpec;
 import org.apache.pinot.spi.data.FieldSpec.DataType;
 import org.apache.pinot.spi.data.Schema;
 import org.apache.pinot.spi.ingestion.batch.BatchConfig;
 import org.apache.pinot.spi.stream.StreamConfig;
+import org.apache.pinot.spi.stream.StreamConfigProperties;
 import org.apache.pinot.spi.utils.CommonConstants;
 import org.apache.pinot.spi.utils.DataSizeUtils;
 import org.apache.pinot.spi.utils.IngestionConfigUtils;
@@ -83,11 +85,15 @@ public final class TableConfigUtils {
   // supported TableTaskTypes, must be identical to the one return in the impl of {@link PinotTaskGenerator}.
   private static final String REALTIME_TO_OFFLINE_TASK_TYPE = "RealtimeToOfflineSegmentsTask";
 
+  // this is duplicate with KinesisConfig.STREAM_TYPE, while instead of use KinesisConfig.STREAM_TYPE directly, we
+  // hardcode the value here to avoid pulling the entire pinot-kinesis module as dependency.
+  private static final String KINESIS_STREAM_TYPE = "kinesis";
+
   /**
-   * @see TableConfigUtils#validate(TableConfig, Schema, String)
+   * @see TableConfigUtils#validate(TableConfig, Schema, String, boolean)
    */
   public static void validate(TableConfig tableConfig, @Nullable Schema schema) {
-    validate(tableConfig, schema, null);
+    validate(tableConfig, schema, null, false);
   }
 
   /**
@@ -100,17 +106,18 @@ public final class TableConfigUtils {
    *
    * TODO: Add more validations for each section (e.g. validate conditions are met for aggregateMetrics)
    */
-  public static void validate(TableConfig tableConfig, @Nullable Schema schema, @Nullable String typesToSkip) {
+  public static void validate(TableConfig tableConfig, @Nullable Schema schema, @Nullable String typesToSkip,
+      boolean disableGroovy) {
     Set<ValidationType> skipTypes = parseTypesToSkipString(typesToSkip);
     if (tableConfig.getTableType() == TableType.REALTIME) {
       Preconditions.checkState(schema != null, "Schema should not be null for REALTIME table");
     }
     // Sanitize the table config before validation
     sanitize(tableConfig);
-    // skip all validation if skip type ALL is selected. 
+    // skip all validation if skip type ALL is selected.
     if (!skipTypes.contains(ValidationType.ALL)) {
       validateValidationConfig(tableConfig, schema);
-      validateIngestionConfig(tableConfig, schema);
+      validateIngestionConfig(tableConfig, schema, disableGroovy);
       validateTierConfigList(tableConfig.getTierConfigsList());
       validateIndexingConfig(tableConfig.getIndexingConfig(), schema);
       validateFieldConfigList(tableConfig.getFieldConfigList(), tableConfig.getIndexingConfig(), schema);
@@ -228,6 +235,11 @@ public final class TableConfigUtils {
     validateRetentionConfig(tableConfig);
   }
 
+  @VisibleForTesting
+  public static void validateIngestionConfig(TableConfig tableConfig, @Nullable Schema schema) {
+    validateIngestionConfig(tableConfig, schema, false);
+  }
+
   /**
    * Validates the following:
    * 1. validity of filter function
@@ -238,7 +250,7 @@ public final class TableConfigUtils {
    * 6. ingestion type for dimension tables
    */
   @VisibleForTesting
-  public static void validateIngestionConfig(TableConfig tableConfig, @Nullable Schema schema) {
+  public static void validateIngestionConfig(TableConfig tableConfig, @Nullable Schema schema, boolean disableGroovy) {
     IngestionConfig ingestionConfig = tableConfig.getIngestionConfig();
 
     if (ingestionConfig != null) {
@@ -286,6 +298,10 @@ public final class TableConfigUtils {
       if (filterConfig != null) {
         String filterFunction = filterConfig.getFilterFunction();
         if (filterFunction != null) {
+          if (disableGroovy && FunctionEvaluatorFactory.isGroovyExpression(filterFunction)) {
+            throw new IllegalStateException(
+                "Groovy filter functions are disabled for table config. Found '" + filterFunction + "'");
+          }
           try {
             FunctionEvaluatorFactory.getExpressionEvaluator(filterFunction);
           } catch (Exception e) {
@@ -313,11 +329,16 @@ public final class TableConfigUtils {
             throw new IllegalStateException("Duplicate transform config found for column '" + columnName + "'");
           }
           FunctionEvaluator expressionEvaluator;
+          if (disableGroovy && FunctionEvaluatorFactory.isGroovyExpression(transformFunction)) {
+            throw new IllegalStateException(
+                "Groovy transform functions are disabled for table config. Found '" + transformFunction
+                    + "' for column '" + columnName + "'");
+          }
           try {
             expressionEvaluator = FunctionEvaluatorFactory.getExpressionEvaluator(transformFunction);
           } catch (Exception e) {
             throw new IllegalStateException(
-                "Invalid transform function '" + transformFunction + "' for column '" + columnName + "'");
+                "Invalid transform function '" + transformFunction + "' for column '" + columnName + "'", e);
           }
           List<String> arguments = expressionEvaluator.getArguments();
           if (arguments.contains(columnName)) {
@@ -856,5 +877,54 @@ public final class TableConfigUtils {
   // enum of all the skip-able validation types.
   public enum ValidationType {
     ALL, TASK, UPSERT
+  }
+
+  /**
+   * needsEmptySegmentPruner checks if EmptySegmentPruner is needed for a TableConfig.
+   * @param tableConfig Input table config.
+   */
+  public static boolean needsEmptySegmentPruner(TableConfig tableConfig) {
+    if (isKinesisConfigured(tableConfig)) {
+      return true;
+    }
+    RoutingConfig routingConfig = tableConfig.getRoutingConfig();
+    if (routingConfig == null) {
+      return false;
+    }
+    List<String> segmentPrunerTypes = routingConfig.getSegmentPrunerTypes();
+    if (segmentPrunerTypes == null || segmentPrunerTypes.isEmpty()) {
+      return false;
+    }
+    for (String segmentPrunerType : segmentPrunerTypes) {
+      if (RoutingConfig.EMPTY_SEGMENT_PRUNER_TYPE.equalsIgnoreCase(segmentPrunerType)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean isKinesisConfigured(TableConfig tableConfig) {
+    IndexingConfig indexingConfig = tableConfig.getIndexingConfig();
+    if (indexingConfig != null) {
+      Map<String, String> streamConfig = indexingConfig.getStreamConfigs();
+      if (streamConfig != null && KINESIS_STREAM_TYPE.equals(
+          streamConfig.get(StreamConfigProperties.STREAM_TYPE))) {
+        return true;
+      }
+    }
+    IngestionConfig ingestionConfig = tableConfig.getIngestionConfig();
+    if (ingestionConfig == null) {
+      return false;
+    }
+    StreamIngestionConfig streamIngestionConfig = ingestionConfig.getStreamIngestionConfig();
+    if (streamIngestionConfig == null) {
+      return false;
+    }
+    for (Map<String, String> config : streamIngestionConfig.getStreamConfigMaps()) {
+      if (config != null && KINESIS_STREAM_TYPE.equals(config.get(StreamConfigProperties.STREAM_TYPE))) {
+        return true;
+      }
+    }
+    return false;
   }
 }

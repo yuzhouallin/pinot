@@ -29,9 +29,9 @@ import java.security.cert.X509Certificate;
 import java.util.HashSet;
 import java.util.Set;
 import javax.net.ssl.SSLPeerUnverifiedException;
-import javax.ws.rs.core.HttpHeaders;
 import org.apache.pinot.server.access.AccessControl;
 import org.apache.pinot.server.access.AccessControlFactory;
+import org.apache.pinot.server.access.RequesterIdentity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,7 +46,8 @@ public class CertBasedTlsChannelAccessControlFactory implements AccessControlFac
     private final Logger _logger = LoggerFactory.getLogger(CertBasedTlsChannelAccessControl.class);
 
     private final Set<String> _aclPrincipalAllowlist = new HashSet<String>() {{
-      add("CN=test, OU=Unknown, O=Unknown, L=Unknown, ST=Unknown, C=Unknown");
+      add("CN=test-jks, OU=Unknown, O=Unknown, L=Unknown, ST=Unknown, C=Unknown");
+      add("CN=test-p12, OU=Unknown, O=Unknown, L=Unknown, ST=Unknown, C=Unknown");
     }};
 
     @Override
@@ -67,7 +68,7 @@ public class CertBasedTlsChannelAccessControlFactory implements AccessControlFac
     }
 
     @Override
-    public boolean hasDataAccess(HttpHeaders httpHeaders, String tableName) {
+    public boolean hasDataAccess(RequesterIdentity requesterIdentity, String tableName) {
       return true;
     }
   }

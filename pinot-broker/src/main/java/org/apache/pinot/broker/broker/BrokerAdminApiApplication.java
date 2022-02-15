@@ -50,7 +50,9 @@ public class BrokerAdminApiApplication extends ResourceConfig {
       BrokerMetrics brokerMetrics, PinotConfiguration brokerConf) {
     packages(RESOURCE_PACKAGE);
     property(PINOT_CONFIGURATION, brokerConf);
-
+    if (brokerConf.getProperty(CommonConstants.Broker.BROKER_SERVICE_AUTO_DISCOVERY, false)) {
+      register(BrokerServiceAutoDiscoveryFeature.class);
+    }
     register(new AbstractBinder() {
       @Override
       protected void configure() {
@@ -82,7 +84,7 @@ public class BrokerAdminApiApplication extends ResourceConfig {
     BeanConfig beanConfig = new BeanConfig();
     beanConfig.setTitle("Pinot Broker API");
     beanConfig.setDescription("APIs for accessing Pinot broker information");
-    beanConfig.setContact("https://github.com/apache/incubator-pinot");
+    beanConfig.setContact("https://github.com/apache/pinot");
     beanConfig.setVersion("1.0");
     beanConfig.setSchemes(new String[]{CommonConstants.HTTP_PROTOCOL, CommonConstants.HTTPS_PROTOCOL});
     beanConfig.setBasePath("/");

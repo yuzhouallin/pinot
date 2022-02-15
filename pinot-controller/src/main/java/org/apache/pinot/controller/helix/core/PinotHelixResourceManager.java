@@ -72,6 +72,7 @@ import org.apache.helix.store.zk.ZkHelixPropertyStore;
 import org.apache.pinot.common.assignment.InstanceAssignmentConfigUtils;
 import org.apache.pinot.common.assignment.InstancePartitions;
 import org.apache.pinot.common.assignment.InstancePartitionsUtils;
+import org.apache.pinot.common.config.provider.TableCache;
 import org.apache.pinot.common.exception.InvalidConfigException;
 import org.apache.pinot.common.exception.SchemaAlreadyExistsException;
 import org.apache.pinot.common.exception.SchemaBackwardIncompatibleException;
@@ -96,7 +97,6 @@ import org.apache.pinot.common.utils.config.TableConfigUtils;
 import org.apache.pinot.common.utils.config.TagNameUtils;
 import org.apache.pinot.common.utils.helix.HelixHelper;
 import org.apache.pinot.common.utils.helix.PinotHelixPropertyStoreZnRecordProvider;
-import org.apache.pinot.common.utils.helix.TableCache;
 import org.apache.pinot.controller.ControllerConf;
 import org.apache.pinot.controller.api.exception.ControllerApplicationException;
 import org.apache.pinot.controller.api.exception.InvalidTableConfigException;
@@ -166,6 +166,7 @@ public class PinotHelixResourceManager {
   private final boolean _isSingleTenantCluster;
   private final boolean _enableBatchMessageMode;
   private final boolean _allowHLCTables;
+  private final int _deletedSegmentsRetentionInDays;
 
   private HelixManager _helixZkManager;
   private HelixAdmin _helixAdmin;
@@ -177,12 +178,14 @@ public class PinotHelixResourceManager {
   private TableCache _tableCache;
 
   public PinotHelixResourceManager(String zkURL, String helixClusterName, @Nullable String dataDir,
-      boolean isSingleTenantCluster, boolean enableBatchMessageMode, boolean allowHLCTables) {
+      boolean isSingleTenantCluster, boolean enableBatchMessageMode, boolean allowHLCTables,
+      int deletedSegmentsRetentionInDays) {
     _helixZkURL = HelixConfig.getAbsoluteZkPathForHelix(zkURL);
     _helixClusterName = helixClusterName;
     _dataDir = dataDir;
     _isSingleTenantCluster = isSingleTenantCluster;
     _enableBatchMessageMode = enableBatchMessageMode;
+    _deletedSegmentsRetentionInDays = deletedSegmentsRetentionInDays;
     _allowHLCTables = allowHLCTables;
     _instanceAdminEndpointCache =
         CacheBuilder.newBuilder().expireAfterWrite(CACHE_ENTRY_EXPIRE_TIME_HOURS, TimeUnit.HOURS)
@@ -225,7 +228,7 @@ public class PinotHelixResourceManager {
   public PinotHelixResourceManager(ControllerConf controllerConf) {
     this(controllerConf.getZkStr(), controllerConf.getHelixClusterName(), controllerConf.getDataDir(),
         controllerConf.tenantIsolationEnabled(), controllerConf.getEnableBatchMessageMode(),
-        controllerConf.getHLCTablesAllowed());
+        controllerConf.getHLCTablesAllowed(), controllerConf.getDeletedSegmentsRetentionInDays());
   }
 
   /**
@@ -242,7 +245,8 @@ public class PinotHelixResourceManager {
     _propertyStore = _helixZkManager.getHelixPropertyStore();
     _helixDataAccessor = _helixZkManager.getHelixDataAccessor();
     _keyBuilder = _helixDataAccessor.keyBuilder();
-    _segmentDeletionManager = new SegmentDeletionManager(_dataDir, _helixAdmin, _helixClusterName, _propertyStore);
+    _segmentDeletionManager = new SegmentDeletionManager(_dataDir, _helixAdmin, _helixClusterName, _propertyStore,
+        _deletedSegmentsRetentionInDays);
     ZKMetadataProvider.setClusterTenantIsolationEnabled(_propertyStore, _isSingleTenantCluster);
 
     // Initialize TableCache
@@ -457,6 +461,10 @@ public class PinotHelixResourceManager {
       return false;
     }
     ParticipantHistory participantHistory = _helixDataAccessor.getProperty(_keyBuilder.participantHistory(instanceId));
+    // returns false if there is no history for this participant.
+    if (participantHistory == null) {
+      return false;
+    }
     long lastOfflineTime = participantHistory.getLastOfflineTime();
     // returns false if the last offline time is a negative number.
     if (lastOfflineTime < 0) {
@@ -1254,18 +1262,17 @@ public class PinotHelixResourceManager {
    */
   public void addTable(TableConfig tableConfig)
       throws IOException {
-    validateTableTenantConfig(tableConfig);
     String tableNameWithType = tableConfig.getTableName();
-    SegmentsValidationAndRetentionConfig segmentsConfig = tableConfig.getValidationConfig();
+    if (getTableConfig(tableNameWithType) != null) {
+      throw new TableAlreadyExistsException("Table " + tableNameWithType + " already exists");
+    }
 
+    validateTableTenantConfig(tableConfig);
+    SegmentsValidationAndRetentionConfig segmentsConfig = tableConfig.getValidationConfig();
     TableType tableType = tableConfig.getTableType();
+
     switch (tableType) {
       case OFFLINE:
-        // existing tooling relies on this check not existing for realtime table (to migrate to LLC)
-        // So, we avoid adding that for REALTIME just yet
-        if (getAllTables().contains(tableNameWithType)) {
-          throw new TableAlreadyExistsException("Table " + tableNameWithType + " already exists");
-        }
         // now lets build an ideal state
         LOGGER.info("building empty ideal state for table : " + tableNameWithType);
         final IdealState offlineIdealState = PinotTableIdealStateBuilder
@@ -1639,10 +1646,6 @@ public class PinotHelixResourceManager {
     ZKMetadataProvider.removeResourceSegmentsFromPropertyStore(_propertyStore, offlineTableName);
     LOGGER.info("Deleting table {}: Removed segment metadata", offlineTableName);
 
-    // Remove table config
-    ZKMetadataProvider.removeResourceConfigFromPropertyStore(_propertyStore, offlineTableName);
-    LOGGER.info("Deleting table {}: Removed table config", offlineTableName);
-
     // Remove instance partitions
     InstancePartitionsUtils.removeInstancePartitions(_propertyStore, offlineTableName);
     LOGGER.info("Deleting table {}: Removed instance partitions", offlineTableName);
@@ -1655,6 +1658,11 @@ public class PinotHelixResourceManager {
     MinionTaskMetadataUtils
         .deleteTaskMetadata(_propertyStore, MinionConstants.MergeRollupTask.TASK_TYPE, offlineTableName);
     LOGGER.info("Deleting table {}: Removed merge rollup task metadata", offlineTableName);
+
+    // Remove table config
+    // this should always be the last step for deletion to avoid race condition in table re-create.
+    ZKMetadataProvider.removeResourceConfigFromPropertyStore(_propertyStore, offlineTableName);
+    LOGGER.info("Deleting table {}: Removed table config", offlineTableName);
 
     LOGGER.info("Deleting table {}: Finish", offlineTableName);
   }
@@ -1682,10 +1690,6 @@ public class PinotHelixResourceManager {
     // Remove segment metadata
     ZKMetadataProvider.removeResourceSegmentsFromPropertyStore(_propertyStore, realtimeTableName);
     LOGGER.info("Deleting table {}: Removed segment metadata", realtimeTableName);
-
-    // Remove table config
-    ZKMetadataProvider.removeResourceConfigFromPropertyStore(_propertyStore, realtimeTableName);
-    LOGGER.info("Deleting table {}: Removed table config", realtimeTableName);
 
     // Remove instance partitions
     String rawTableName = TableNameBuilder.extractRawTableName(tableName);
@@ -1719,6 +1723,11 @@ public class PinotHelixResourceManager {
       }
     }
     LOGGER.info("Deleting table {}: Removed groupId/partitionId mapping for HLC table", realtimeTableName);
+
+    // Remove table config
+    // this should always be the last step for deletion to avoid race condition in table re-create.
+    ZKMetadataProvider.removeResourceConfigFromPropertyStore(_propertyStore, realtimeTableName);
+    LOGGER.info("Deleting table {}: Removed table config", realtimeTableName);
 
     LOGGER.info("Deleting table {}: Finish", realtimeTableName);
   }
@@ -1774,48 +1783,69 @@ public class PinotHelixResourceManager {
 
   public void addNewSegment(String tableNameWithType, SegmentMetadata segmentMetadata, String downloadUrl,
       @Nullable String crypter) {
-    String segmentName = segmentMetadata.getName();
-    InstancePartitionsType instancePartitionsType;
     // NOTE: must first set the segment ZK metadata before assigning segment to instances because segment assignment
     // might need them to determine the partition of the segment, and server will need them to download the segment
-    ZNRecord znRecord;
+    SegmentZKMetadata segmentZkmetadata =
+        constructZkMetadataForNewSegment(tableNameWithType, segmentMetadata, downloadUrl, crypter);
+    ZNRecord znRecord = segmentZkmetadata.toZNRecord();
+
+    String segmentName = segmentMetadata.getName();
+    String segmentZKMetadataPath =
+        ZKMetadataProvider.constructPropertyStorePathForSegment(tableNameWithType, segmentName);
+    Preconditions.checkState(_propertyStore.set(segmentZKMetadataPath, znRecord, AccessOption.PERSISTENT),
+        "Failed to set segment ZK metadata for table: " + tableNameWithType + ", segment: " + segmentName);
+    LOGGER.info("Added segment: {} of table: {} to property store", segmentName, tableNameWithType);
+
+    assignTableSegment(tableNameWithType, segmentName);
+  }
+
+  /**
+   * Construct segmentZkMetadata for new segment of offline or realtime table.
+   *
+   * @param tableNameWithType Table name with type
+   * @param segmentMetadata Segment metadata
+   * @param downloadUrl Download URL
+   * @param crypter Crypter
+   * @return SegmentZkMetadata of the input segment
+   */
+  public SegmentZKMetadata constructZkMetadataForNewSegment(String tableNameWithType, SegmentMetadata segmentMetadata,
+      String downloadUrl, @Nullable String crypter) {
+    // Construct segment zk metadata with common fields for offline and realtime.
+    String segmentName = segmentMetadata.getName();
+    SegmentZKMetadata segmentZKMetadata = new SegmentZKMetadata(segmentName);
+    ZKMetadataUtils.updateSegmentMetadata(segmentZKMetadata, segmentMetadata);
+    segmentZKMetadata.setDownloadUrl(downloadUrl);
+    segmentZKMetadata.setCrypterName(crypter);
+
     if (TableNameBuilder.isRealtimeTableResource(tableNameWithType)) {
       Preconditions.checkState(isUpsertTable(tableNameWithType),
           "Upload segment " + segmentName + " for non upsert enabled realtime table " + tableNameWithType
               + " is not supported");
+      // Set fields specific to realtime segments.
+      segmentZKMetadata.setStatus(CommonConstants.Segment.Realtime.Status.UPLOADED);
+    } else {
+      // Set fields specific to offline segments.
+      segmentZKMetadata.setPushTime(System.currentTimeMillis());
+    }
+
+    return segmentZKMetadata;
+  }
+
+  public void assignTableSegment(String tableNameWithType, String segmentName) {
+    String segmentZKMetadataPath =
+        ZKMetadataProvider.constructPropertyStorePathForSegment(tableNameWithType, segmentName);
+    InstancePartitionsType instancePartitionsType;
+    if (TableNameBuilder.isRealtimeTableResource(tableNameWithType)) {
       // In an upsert enabled LLC realtime table, all segments of the same partition are collocated on the same server
       // -- consuming or completed. So it is fine to use CONSUMING as the InstancePartitionsType.
       // TODO When upload segments is open to all realtime tables, we should change the type to COMPLETED instead.
       // In addition, RealtimeSegmentAssignment.assignSegment(..) method should be updated so that the method does not
       // assign segments to CONSUMING instance partition only.
       instancePartitionsType = InstancePartitionsType.CONSUMING;
-      // Build the realtime segment zk metadata with necessary fields.
-      SegmentZKMetadata segmentZKMetadata = new SegmentZKMetadata(segmentName);
-      ZKMetadataUtils.updateSegmentMetadata(segmentZKMetadata, segmentMetadata);
-      segmentZKMetadata.setDownloadUrl(downloadUrl);
-      segmentZKMetadata.setCrypterName(crypter);
-      segmentZKMetadata.setStatus(CommonConstants.Segment.Realtime.Status.UPLOADED);
-      znRecord = segmentZKMetadata.toZNRecord();
     } else {
       instancePartitionsType = InstancePartitionsType.OFFLINE;
-      // Build the offline segment zk metadata with necessary fields.
-      SegmentZKMetadata segmentZKMetadata = new SegmentZKMetadata(segmentName);
-      ZKMetadataUtils.updateSegmentMetadata(segmentZKMetadata, segmentMetadata);
-      segmentZKMetadata.setDownloadUrl(downloadUrl);
-      segmentZKMetadata.setCrypterName(crypter);
-      segmentZKMetadata.setPushTime(System.currentTimeMillis());
-      znRecord = segmentZKMetadata.toZNRecord();
     }
-    String segmentZKMetadataPath =
-        ZKMetadataProvider.constructPropertyStorePathForSegment(tableNameWithType, segmentName);
-    Preconditions.checkState(_propertyStore.set(segmentZKMetadataPath, znRecord, AccessOption.PERSISTENT),
-        "Failed to set segment ZK metadata for table: " + tableNameWithType + ", segment: " + segmentName);
-    LOGGER.info("Added segment: {} of table: {} to property store", segmentName, tableNameWithType);
-    assignTableSegment(tableNameWithType, segmentName, segmentZKMetadataPath, instancePartitionsType);
-  }
 
-  private void assignTableSegment(String tableNameWithType, String segmentName, String segmentZKMetadataPath,
-      InstancePartitionsType instancePartitionsType) {
     // Assign instances for the segment and add it into IdealState
     try {
       TableConfig tableConfig = getTableConfig(tableNameWithType);
@@ -1874,6 +1904,17 @@ public class PinotHelixResourceManager {
   public ZNRecord getSegmentMetadataZnRecord(String tableNameWithType, String segmentName) {
     return ZKMetadataProvider.getZnRecord(_propertyStore,
         ZKMetadataProvider.constructPropertyStorePathForSegment(tableNameWithType, segmentName));
+  }
+
+  /**
+   * Creates a new SegmentZkMetadata entry. This call is atomic and ensures that only of the create calls succeeds.
+   *
+   * @param tableNameWithType
+   * @param segmentZKMetadata
+   * @return
+   */
+  public boolean createSegmentZkMetadata(String tableNameWithType, SegmentZKMetadata segmentZKMetadata) {
+    return ZKMetadataProvider.createSegmentZkMetadata(_propertyStore, tableNameWithType, segmentZKMetadata);
   }
 
   public boolean updateZkMetadata(String tableNameWithType, SegmentZKMetadata segmentZKMetadata, int expectedVersion) {
@@ -2594,7 +2635,7 @@ public class PinotHelixResourceManager {
               // TODO: Handle the case when realtime segments are in OFFLINE state because there're some problem with
               //  realtime segment consumption,
               //  and realtime segment will mark itself as OFFLINE in ideal state.
-              //  Issue: https://github.com/apache/incubator-pinot/issues/4653
+              //  Issue: https://github.com/apache/pinot/issues/4653
               if ((enableInstance && !offlineState.equals(state)) || (!enableInstance && offlineState.equals(state))) {
                 toggleSucceeded = false;
                 break;
@@ -2752,6 +2793,11 @@ public class PinotHelixResourceManager {
    * 2. Compute validation on the user inputs
    * 3. Add the new lineage entry to the segment lineage metadata in the property store
    *
+   * If the previous lineage entry is "IN_PROGRESS" while having the same "segmentsFrom", this means that some other job
+   * is attempting to replace the same target segments or some previous attempt failed in the middle. Default behavior
+   * to handle this case is to throw the exception and block the protocol. If "forceCleanup=true", we proactively set
+   * the previous lineage to be "REVERTED" and move forward with the existing replacement attempt.
+   *
    * Update is done with retry logic along with read-modify-write block for achieving atomic update of the lineage
    * metadata.
    *
@@ -2783,6 +2829,10 @@ public class PinotHelixResourceManager {
 
     try {
       DEFAULT_RETRY_POLICY.attempt(() -> {
+        // Fetch table config
+        TableConfig tableConfig = ZKMetadataProvider.getTableConfig(_propertyStore, tableNameWithType);
+        Preconditions.checkNotNull(tableConfig, "Table config is not available for table '%s'", tableNameWithType);
+
         // Fetch the segment lineage metadata
         ZNRecord segmentLineageZNRecord =
             SegmentLineageAccessHelper.getSegmentLineageZNRecord(_propertyStore, tableNameWithType);
@@ -2794,7 +2844,6 @@ public class PinotHelixResourceManager {
           segmentLineage = SegmentLineage.fromZNRecord(segmentLineageZNRecord);
           expectedVersion = segmentLineageZNRecord.getVersion();
         }
-
         // Check that the segment lineage entry id doesn't exists in the segment lineage
         Preconditions.checkArgument(segmentLineage.getLineageEntry(segmentLineageEntryId) == null,
             String.format("SegmentLineageEntryId (%s) already exists in the segment lineage.", segmentLineageEntryId));
@@ -2806,20 +2855,55 @@ public class PinotHelixResourceManager {
           // If the lineage entry is in 'REVERTED' state, no need to go through the validation because we can regard
           // the entry as not existing.
           if (lineageEntry.getState() == LineageEntryState.REVERTED) {
+            // When 'forceCleanup' is enabled, proactively clean up 'segmentsTo' since it's safe to do so.
+            if (forceCleanup) {
+              segmentsToCleanUp.addAll(lineageEntry.getSegmentsTo());
+            }
             continue;
           }
 
           // By here, the lineage entry is either 'IN_PROGRESS' or 'COMPLETED'.
 
-          // When 'forceCleanup' is enabled, we need to proactively revert the lineage entry when we find the lineage
-          // entry with the same 'segmentFrom' values.
-          if (forceCleanup && lineageEntry.getState() == LineageEntryState.IN_PROGRESS && CollectionUtils
-              .isEqualCollection(segmentsFrom, lineageEntry.getSegmentsFrom())) {
-            // Update segment lineage entry to 'REVERTED'
-            updateSegmentLineageEntryToReverted(tableNameWithType, segmentLineage, entryId, lineageEntry);
+          // When 'forceCleanup' is enabled, we need to proactively clean up at the following cases:
+          // 1. Revert the lineage entry when we find the lineage entry with the same 'segmentFrom' values. This is
+          //    used to un-block the segment replacement protocol if the previous attempt failed in the middle.
+          // 2. Proactively delete the oldest data snapshot to make sure that we only keep at most 2 data snapshots
+          //    at any time in case of REFRESH use case.
+          if (forceCleanup) {
+            if (lineageEntry.getState() == LineageEntryState.IN_PROGRESS && CollectionUtils
+                .isEqualCollection(segmentsFrom, lineageEntry.getSegmentsFrom())) {
+              LOGGER.info(
+                  "Detected the incomplete lineage entry with the same 'segmentsFrom'. Reverting the lineage "
+                      + "entry to unblock the new segment protocol. tableNameWithType={}, entryId={}, segmentsFrom={}, "
+                      + "segmentsTo={}", tableNameWithType, entryId, lineageEntry.getSegmentsFrom(),
+                  lineageEntry.getSegmentsTo());
 
-            // Add segments for proactive clean-up.
-            segmentsToCleanUp.addAll(lineageEntry.getSegmentsTo());
+              // Update segment lineage entry to 'REVERTED'
+              updateSegmentLineageEntryToReverted(tableNameWithType, segmentLineage, entryId, lineageEntry);
+
+              // Add segments for proactive clean-up.
+              segmentsToCleanUp.addAll(lineageEntry.getSegmentsTo());
+            } else if (lineageEntry.getState() == LineageEntryState.COMPLETED && IngestionConfigUtils
+                .getBatchSegmentIngestionType(tableConfig).equalsIgnoreCase("REFRESH") && CollectionUtils
+                .isEqualCollection(segmentsFrom, lineageEntry.getSegmentsTo())) {
+              // This part of code assumes that we only allow at most 2 data snapshots at a time by proactively
+              // deleting the older snapshots (for REFRESH tables).
+              //
+              // e.g. (Seg_0, Seg_1, Seg_2) -> (Seg_3, Seg_4, Seg_5)  // previous lineage
+              //      (Seg_3, Seg_4, Seg_5) -> (Seg_6, Seg_7, Seg_8)  // current lineage to be updated
+              // -> proactively delete (Seg_0, Seg_1, Seg_2) since we want to keep 2 data snapshots
+              //    (Seg_3, Seg_4, Seg_5), (Seg_6, Seg_7, Seg_8) only to avoid the disk space waste.
+              //
+              // TODO: make the number of allowed snapshots configurable to allow users to keep at most N snapshots
+              //       of data. We need to traverse the lineage by N steps instead of 2 steps. We can build the reverse
+              //       hash map (segmentsTo -> segmentsFrom) and traverse up to N times before deleting.
+              //
+              LOGGER.info(
+                  "Proactively deleting the replaced segments for REFRESH table to avoid the excessive disk waste. "
+                      + "tableNameWithType={}, segmentsToCleanUp={}", tableNameWithType,
+                  lineageEntry.getSegmentsFrom());
+              segmentsToCleanUp.addAll(lineageEntry.getSegmentsFrom());
+            }
           } else {
             // Check that any segment from 'segmentsFrom' does not appear twice.
             Preconditions.checkArgument(Collections.disjoint(lineageEntry.getSegmentsFrom(), segmentsFrom), String
@@ -2844,6 +2928,7 @@ public class PinotHelixResourceManager {
           // Trigger the proactive segment clean up if needed. Once the lineage is updated in the property store, it
           // is safe to physically delete segments.
           if (!segmentsToCleanUp.isEmpty()) {
+            LOGGER.info("Cleaning up the segments while startReplaceSegments: {}", segmentsToCleanUp);
             deleteSegments(tableNameWithType, segmentsToCleanUp);
           }
           return true;
@@ -2899,10 +2984,12 @@ public class PinotHelixResourceManager {
 
         // NO-OPS if the entry is already 'COMPLETED' or 'REVERTED'
         if (lineageEntry.getState() != LineageEntryState.IN_PROGRESS) {
-          LOGGER.warn("Lineage entry state is not 'IN_PROGRESS'. Cannot update to 'COMPLETED'. (tableNameWithType={}, "
-                  + "segmentLineageEntryId={}, state={})", tableNameWithType, segmentLineageEntryId,
-              lineageEntry.getState());
-          return true;
+          String errorMsg = String.format(
+              "The target lineage entry state is not 'IN_PROGRESS'. Cannot update to 'COMPLETED' state. "
+                  + "(tableNameWithType=%s, segmentLineageEntryId=%s, state=%s)", tableNameWithType,
+              segmentLineageEntryId, lineageEntry.getState());
+          LOGGER.error(errorMsg);
+          throw new RuntimeException(errorMsg);
         }
 
         // Check that all the segments from 'segmentsTo' exist in the table
@@ -2991,6 +3078,25 @@ public class PinotHelixResourceManager {
           throw new RuntimeException(errorMsg);
         }
 
+        // We do not allow to revert the lineage entry which segments in 'segmentsTo' appear in 'segmentsFrom' of other
+        // 'IN_PROGRESS' or 'COMPLETED' entries. E.g. we do not allow reverting entry1 because it will block reverting
+        // entry2.
+        // entry1: {(Seg_0, Seg_1, Seg_2) -> (Seg_3, Seg_4, Seg_5), COMPLETED}
+        // entry2: {(Seg_3, Seg_4, Seg_5) -> (Seg_6, Seg_7, Seg_8), IN_PROGRESS/COMPLETED}
+        // TODO: need to expand the logic to revert multiple entries in one go when we support > 2 data snapshots
+        for (String currentEntryId : segmentLineage.getLineageEntryIds()) {
+          LineageEntry currentLineageEntry = segmentLineage.getLineageEntry(currentEntryId);
+          if (currentLineageEntry.getState() == LineageEntryState.IN_PROGRESS
+              || currentLineageEntry.getState() == LineageEntryState.COMPLETED) {
+            Preconditions.checkArgument(Collections.disjoint(lineageEntry.getSegmentsTo(), currentLineageEntry
+                .getSegmentsFrom()), String.format("Cannot revert lineage entry, found segments from 'segmentsTo' "
+                    + "appear in 'segmentsFrom' of another lineage entry. (tableNameWithType='%s', "
+                    + "segmentLineageEntryId='%s', segmentsTo = '%s', segmentLineageEntryId='%s' "
+                    + "segmentsFrom = '%s')", tableNameWithType, segmentLineageEntryId, lineageEntry.getSegmentsTo(),
+                currentEntryId, currentLineageEntry.getSegmentsFrom()));
+          }
+        }
+
         // Update segment lineage entry to 'REVERTED'
         updateSegmentLineageEntryToReverted(tableNameWithType, segmentLineage, segmentLineageEntryId, lineageEntry);
 
@@ -3001,10 +3107,8 @@ public class PinotHelixResourceManager {
           // different after updating the lineage entry.
           sendRoutingTableRebuildMessage(tableNameWithType);
 
-          // Invoke the proactive clean-up for segments that we no longer needs in case 'forceRevert' is enabled
-          if (forceRevert) {
-            deleteSegments(tableNameWithType, lineageEntry.getSegmentsTo());
-          }
+          // Invoke the proactive clean-up for segments that we no longer needs
+          deleteSegments(tableNameWithType, lineageEntry.getSegmentsTo());
           return true;
         } else {
           return false;

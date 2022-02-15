@@ -48,6 +48,7 @@ import org.apache.pinot.broker.queryquota.QueryQuotaManager;
 import org.apache.pinot.broker.routing.RoutingManager;
 import org.apache.pinot.broker.routing.RoutingTable;
 import org.apache.pinot.broker.routing.timeboundary.TimeBoundaryInfo;
+import org.apache.pinot.common.config.provider.TableCache;
 import org.apache.pinot.common.exception.QueryException;
 import org.apache.pinot.common.function.TransformFunctionType;
 import org.apache.pinot.common.metrics.BrokerGauge;
@@ -74,8 +75,8 @@ import org.apache.pinot.common.response.broker.BrokerResponseNative;
 import org.apache.pinot.common.response.broker.QueryProcessingException;
 import org.apache.pinot.common.response.broker.ResultTable;
 import org.apache.pinot.common.utils.DataSchema;
-import org.apache.pinot.common.utils.helix.TableCache;
 import org.apache.pinot.common.utils.request.RequestUtils;
+import org.apache.pinot.core.operator.transform.function.TransformFunctionFactory;
 import org.apache.pinot.core.query.aggregation.function.AggregationFunctionUtils;
 import org.apache.pinot.core.query.optimizer.QueryOptimizer;
 import org.apache.pinot.core.requesthandler.PinotQueryParserFactory;
@@ -106,6 +107,7 @@ public abstract class BaseBrokerRequestHandler implements BrokerRequestHandler {
   private static final String IN_SUBQUERY = "inSubquery";
   private static final Expression FALSE = RequestUtils.getLiteralExpression(false);
   private static final Expression TRUE = RequestUtils.getLiteralExpression(true);
+  private static final Expression STAR = RequestUtils.getIdentifierExpression("*");
 
   protected final PinotConfiguration _config;
   protected final RoutingManager _routingManager;
@@ -127,6 +129,7 @@ public abstract class BaseBrokerRequestHandler implements BrokerRequestHandler {
   private final RateLimiter _numDroppedLogRateLimiter;
   private final AtomicInteger _numDroppedLog;
 
+  private final boolean _disableGroovy;
   private final int _defaultHllLog2m;
   private final boolean _enableQueryLimitOverride;
   private final boolean _enableDistinctCountBitmapOverride;
@@ -141,6 +144,7 @@ public abstract class BaseBrokerRequestHandler implements BrokerRequestHandler {
     _tableCache = tableCache;
     _brokerMetrics = brokerMetrics;
 
+    _disableGroovy = _config.getProperty(CommonConstants.Broker.DISABLE_GROOVY, false);
     _defaultHllLog2m = _config.getProperty(CommonConstants.Helix.DEFAULT_HYPERLOGLOG_LOG2M_KEY,
         CommonConstants.Helix.DEFAULT_HYPERLOGLOG_LOG2M);
     _enableQueryLimitOverride = _config.getProperty(Broker.CONFIG_OF_ENABLE_QUERY_LIMIT_OVERRIDE, false);
@@ -268,6 +272,9 @@ public abstract class BaseBrokerRequestHandler implements BrokerRequestHandler {
       }
       LOGGER.warn("Caught exception while updating column names in request {}: {}, {}", requestId, query,
           e.getMessage());
+    }
+    if (_disableGroovy) {
+      rejectGroovyQuery(pinotQuery);
     }
     if (_defaultHllLog2m > 0) {
       handleHLLLog2mOverride(pinotQuery, _defaultHllLog2m);
@@ -1168,6 +1175,57 @@ public abstract class BaseBrokerRequestHandler implements BrokerRequestHandler {
   }
 
   /**
+   * Verifies that no groovy is present in the PinotQuery when disabled.
+   */
+  @VisibleForTesting
+  static void rejectGroovyQuery(PinotQuery pinotQuery) {
+    List<Expression> selectList = pinotQuery.getSelectList();
+    for (Expression expression : selectList) {
+      rejectGroovyQuery(expression);
+    }
+    List<Expression> orderByList = pinotQuery.getOrderByList();
+    if (orderByList != null) {
+      for (Expression expression : orderByList) {
+        // NOTE: Order-by is always a Function with the ordering of the Expression
+        rejectGroovyQuery(expression.getFunctionCall().getOperands().get(0));
+      }
+    }
+    Expression havingExpression = pinotQuery.getHavingExpression();
+    if (havingExpression != null) {
+      rejectGroovyQuery(havingExpression);
+    }
+    Expression filterExpression = pinotQuery.getFilterExpression();
+    if (filterExpression != null) {
+      rejectGroovyQuery(filterExpression);
+    }
+    List<Expression> groupByList = pinotQuery.getGroupByList();
+    if (groupByList != null) {
+      for (Expression expression : groupByList) {
+        rejectGroovyQuery(expression);
+      }
+    }
+  }
+
+  private static void rejectGroovyQuery(Expression expression) {
+    Function functionCall = expression.getFunctionCall();
+    if (functionCall == null) {
+      return;
+    }
+
+    if (TransformFunctionFactory.canonicalize(functionCall.getOperator())
+        .equals(TransformFunctionType.GROOVY.getName())) {
+      throw new BadQueryRequestException("Groovy transform functions are disabled for queries");
+    }
+
+    List<Expression> operands = functionCall.getOperands();
+    if (operands != null) {
+      for (Expression operandExpression : operands) {
+        rejectGroovyQuery(operandExpression);
+      }
+    }
+  }
+
+  /**
    * Sets HyperLogLog log2m for DistinctCountHLL functions if not explicitly set for the given SQL expression.
    */
   private static void handleHLLLog2mOverride(Expression expression, int hllLog2mOverride) {
@@ -1459,8 +1517,17 @@ public abstract class BaseBrokerRequestHandler implements BrokerRequestHandler {
       Map<String, String> columnNameMap) {
     Map<String, String> aliasMap = new HashMap<>();
     if (pinotQuery != null) {
+      boolean hasStar = false;
       for (Expression expression : pinotQuery.getSelectList()) {
         fixColumnName(rawTableName, expression, columnNameMap, aliasMap, isCaseInsensitive);
+        //check if the select expression is '*'
+        if (!hasStar && expression.equals(STAR)) {
+          hasStar = true;
+        }
+      }
+      //if query has a '*' selection along with other columns
+      if (hasStar) {
+        expandStarExpressionsToActualColumns(pinotQuery, columnNameMap);
       }
       Expression filterExpression = pinotQuery.getFilterExpression();
       if (filterExpression != null) {
@@ -1485,6 +1552,30 @@ public abstract class BaseBrokerRequestHandler implements BrokerRequestHandler {
         fixColumnName(rawTableName, havingExpression, columnNameMap, aliasMap, isCaseInsensitive);
       }
     }
+  }
+
+  private static void expandStarExpressionsToActualColumns(PinotQuery pinotQuery, Map<String, String> columnNameMap) {
+    List<Expression> originalSelections = pinotQuery.getSelectList();
+    //expand '*'
+    List<Expression> expandedSelections = new ArrayList<>();
+    for (String tableCol : columnNameMap.values()) {
+      Expression newSelection = RequestUtils.createIdentifierExpression(tableCol);
+      //we exclude default virtual columns
+      if (tableCol.charAt(0) != '$') {
+        expandedSelections.add(newSelection);
+      }
+    }
+    //sort naturally
+    expandedSelections.sort(null);
+    List<Expression> newSelections = new ArrayList<>();
+    for (Expression originalSelection : originalSelections) {
+      if (originalSelection.equals(STAR)) {
+        newSelections.addAll(expandedSelections);
+      } else {
+        newSelections.add(originalSelection);
+      }
+    }
+    pinotQuery.setSelectList(newSelections);
   }
 
   /**

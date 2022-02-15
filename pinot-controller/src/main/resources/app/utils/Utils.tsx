@@ -21,6 +21,7 @@
 import React from 'react';
 import ReactDiffViewer, {DiffMethod} from 'react-diff-viewer';
 import _ from 'lodash';
+import app_state from '../app_state';
 
 const sortArray = function (sortingArr, keyName, ascendingFlag) {
   if (ascendingFlag) {
@@ -53,7 +54,7 @@ const tableFormat = (data) => {
   rows.forEach((singleRow) => {
     const obj = {};
     singleRow.forEach((val: any, index: number) => {
-      obj[header[index]] = val;
+      obj[header[index]+app_state.columnNameSeparator+index] = val;
     });
     results.push(obj);
   });
@@ -323,6 +324,18 @@ const encodeString = (str: string) => {
   return str;
 }
 
+const formatBytes = (bytes, decimals = 2) => {
+  if (bytes === 0) return '0 Bytes';
+
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
 export default {
   sortArray,
   tableFormat,
@@ -332,5 +345,6 @@ export default {
   serialize,
   navigateToPreviousPage,
   syncTableSchemaData,
-  encodeString
+  encodeString,
+  formatBytes
 };

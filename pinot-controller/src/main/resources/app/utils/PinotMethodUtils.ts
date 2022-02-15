@@ -79,22 +79,33 @@ const JSONbig = require('json-bigint')({'storeAsString': true})
 const getTenantsData = () => {
   return getTenants().then(({ data }) => {
     const records = _.union(data.SERVER_TENANTS, data.BROKER_TENANTS);
-    const promiseArr = [];
+    const serverPromiseArr = [], brokerPromiseArr = [], tablePromiseArr = [];
     const finalResponse = {
       columns: ['Tenant Name', 'Server', 'Broker', 'Tables'],
       records: []
     };
     records.map((record)=>{
       finalResponse.records.push([
-        record,
-        data.SERVER_TENANTS.indexOf(record) > -1 ? 1 : 0,
-        data.BROKER_TENANTS.indexOf(record) > -1 ? 1 : 0
+        record
       ]);
-      promiseArr.push(getTenantTable(record));
+      serverPromiseArr.push(getServerOfTenant(record));
+      brokerPromiseArr.push(getBrokerOfTenant(record));
+      tablePromiseArr.push(getTenantTable(record));
     });
-    return Promise.all(promiseArr).then((results)=>{
-      results.map((result, index)=>{
-        finalResponse.records[index].push(result.data.tables.length);
+    return Promise.all([
+      Promise.all(serverPromiseArr),
+      Promise.all(brokerPromiseArr),
+      Promise.all(tablePromiseArr)
+    ]).then((results)=>{
+      const serversResponseData = results[0];
+      const brokersResponseData = results[1];
+      const tablesResponseData = results[2];
+
+      tablesResponseData.map((tableResult, index)=>{
+        const serverCount = serversResponseData[index]?.length || 0;
+        const brokerCount = brokersResponseData[index]?.length || 0;
+        const tablesCount = tableResult.data.tables.length
+        finalResponse.records[index].push(serverCount, brokerCount, tablesCount);
       });
       return finalResponse;
     });
@@ -228,57 +239,60 @@ const getQueryResults = (params, url, checkedOptions) => {
     let queryResponse = null;
     queryResponse = getAsObject(data);
 
-    // if sql api throws error, handle here
-    if(typeof queryResponse === 'string'){
-      return {error: queryResponse};
-    } else if(queryResponse.exceptions.length){
-      return {error: JSON.stringify(queryResponse.exceptions, null, 2)};
-    }
-
+    let errorStr = '';
     let dataArray = [];
     let columnList = [];
-    if (checkedOptions.querySyntaxPQL === true) {
-      if (queryResponse) {
-        if (queryResponse.selectionResults) {
-          // Selection query
-          columnList = queryResponse.selectionResults.columns;
-          dataArray = queryResponse.selectionResults.results;
-        } else if (!queryResponse.aggregationResults[0]?.groupByResult) {
-          // Simple aggregation query
-          columnList = _.map(
-            queryResponse.aggregationResults,
-            (aggregationResult) => {
-              return { title: aggregationResult.function };
-            }
-          );
+    // if sql api throws error, handle here
+    if(typeof queryResponse === 'string'){
+      errorStr = queryResponse;
+    } else if (queryResponse && queryResponse.exceptions && queryResponse.exceptions.length) {
+      errorStr = JSON.stringify(queryResponse.exceptions, null, 2);
+    } else
+    {
+      if (checkedOptions.querySyntaxPQL === true)
+      {
+        if (queryResponse)
+        {
+          if (queryResponse.selectionResults)
+          {
+            // Selection query
+            columnList = queryResponse.selectionResults.columns;
+            dataArray = queryResponse.selectionResults.results;
+          }
+          else if (!queryResponse.aggregationResults[0]?.groupByResult)
+          {
+            // Simple aggregation query
+            columnList = _.map(queryResponse.aggregationResults, (aggregationResult) => {
+              return {title: aggregationResult.function};
+            });
 
-          dataArray.push(
-            _.map(queryResponse.aggregationResults, (aggregationResult) => {
+            dataArray.push(_.map(queryResponse.aggregationResults, (aggregationResult) => {
               return aggregationResult.value;
-            })
-          );
-        } else if (queryResponse.aggregationResults[0]?.groupByResult) {
-          // Aggregation group by query
-          // TODO - Revisit
-          const columns = queryResponse.aggregationResults[0].groupByColumns;
-          columns.push(queryResponse.aggregationResults[0].function);
-          columnList = _.map(columns, (columnName) => {
-            return columnName;
-          });
+            }));
+          }
+          else if (queryResponse.aggregationResults[0]?.groupByResult)
+          {
+            // Aggregation group by query
+            // TODO - Revisit
+            const columns = queryResponse.aggregationResults[0].groupByColumns;
+            columns.push(queryResponse.aggregationResults[0].function);
+            columnList = _.map(columns, (columnName) => {
+              return columnName;
+            });
 
-          dataArray = _.map(
-            queryResponse.aggregationResults[0].groupByResult,
-            (aggregationGroup) => {
+            dataArray = _.map(queryResponse.aggregationResults[0].groupByResult, (aggregationGroup) => {
               const row = aggregationGroup.group;
               row.push(aggregationGroup.value);
               return row;
-            }
-          );
+            });
+          }
         }
       }
-    } else if (queryResponse.resultTable?.dataSchema?.columnNames?.length) {
-      columnList = queryResponse.resultTable.dataSchema.columnNames;
-      dataArray = queryResponse.resultTable.rows;
+      else if (queryResponse.resultTable?.dataSchema?.columnNames?.length)
+      {
+        columnList = queryResponse.resultTable.dataSchema.columnNames;
+        dataArray = queryResponse.resultTable.rows;
+      }
     }
 
     const columnStats = ['timeUsedMs',
@@ -306,6 +320,7 @@ const getQueryResults = (params, url, checkedOptions) => {
     ];
 
     return {
+      error: errorStr,
       result: {
         columns: columnList,
         records: dataArray,
@@ -407,8 +422,8 @@ const getAllTableDetails = (tablesList) => {
           } = result.data;
           singleTableData.push(
             tableName,
-            reportedSizeInBytes,
-            estimatedSizeInBytes
+            Utils.formatBytes(reportedSizeInBytes),
+            Utils.formatBytes(estimatedSizeInBytes)
           );
         } else if (index % 3 === 1) {
           // response of getIdealState API

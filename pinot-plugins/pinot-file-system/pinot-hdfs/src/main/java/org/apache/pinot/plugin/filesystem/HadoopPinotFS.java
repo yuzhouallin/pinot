@@ -35,7 +35,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.pinot.spi.env.PinotConfiguration;
-import org.apache.pinot.spi.filesystem.PinotFS;
+import org.apache.pinot.spi.filesystem.BasePinotFS;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,7 +43,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Implementation of PinotFS for the Hadoop Filesystem
  */
-public class HadoopPinotFS extends PinotFS {
+public class HadoopPinotFS extends BasePinotFS {
   private static final Logger LOGGER = LoggerFactory.getLogger(HadoopPinotFS.class);
 
   private static final String PRINCIPAL = "hadoop.kerberos.principle";
@@ -55,7 +55,6 @@ public class HadoopPinotFS extends PinotFS {
   private org.apache.hadoop.conf.Configuration _hadoopConf;
 
   public HadoopPinotFS() {
-
   }
 
   @Override
@@ -183,6 +182,9 @@ public class HadoopPinotFS extends PinotFS {
       if (_hadoopFS == null) {
         throw new RuntimeException("_hadoopFS client is not initialized when trying to copy files");
       }
+      if (_hadoopFS.isDirectory(remoteFile)) {
+        throw new IllegalArgumentException(srcUri.toString() + " is a direactory");
+      }
       long startMs = System.currentTimeMillis();
       _hadoopFS.copyToLocalFile(remoteFile, localFile);
       LOGGER.debug("copied {} from hdfs to {} in local for size {}, take {} ms", srcUri, dstFilePath, dstFile.length(),
@@ -196,7 +198,19 @@ public class HadoopPinotFS extends PinotFS {
   @Override
   public void copyFromLocalFile(File srcFile, URI dstUri)
       throws Exception {
+    if (srcFile.isDirectory()) {
+      throw new IllegalArgumentException(srcFile.getAbsolutePath() + " is a direactory");
+    }
     _hadoopFS.copyFromLocalFile(new Path(srcFile.toURI()), new Path(dstUri));
+  }
+
+  public void copyFromLocalDir(File srcFile, URI dstUri)
+      throws Exception {
+    Path srcPath = new Path(srcFile.toURI());
+    if (!_hadoopFS.isDirectory(srcPath)) {
+      throw new IllegalArgumentException(srcFile.getAbsolutePath() + " is not a directory");
+    }
+    _hadoopFS.copyFromLocalFile(srcPath, new Path(dstUri));
   }
 
   @Override

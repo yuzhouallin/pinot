@@ -42,9 +42,10 @@ import KeyboardArrowRight from '@material-ui/icons/KeyboardArrowRight';
 import LastPageIcon from '@material-ui/icons/LastPage';
 import ArrowDropDownIcon from '@material-ui/icons/ArrowDropDown';
 import ArrowDropUpIcon from '@material-ui/icons/ArrowDropUp';
-import { NavLink, useHistory } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import Chip from '@material-ui/core/Chip';
 import _ from 'lodash';
+import app_state from '../app_state';
 import Utils from '../utils/Utils';
 import TableToolbar from './TableToolbar';
 import SimpleAccordion from './SimpleAccordion';
@@ -271,7 +272,6 @@ export default function CustomizedTables({
   accordionToggleObject,
   tooltipData
 }: Props) {
-  const history = useHistory();
   const [finalData, setFinalData] = React.useState(Utils.tableFormat(data));
 
   const [order, setOrder] = React.useState(false);
@@ -451,14 +451,14 @@ export default function CustomizedTables({
                     onClick={() => {
                       if(column === 'Number of Segments'){
                         const data = finalData.sort((a,b)=>{
-                          const aSegmentInt = parseInt(a[column]);
-                          const bSegmentInt = parseInt(b[column]);
+                          const aSegmentInt = parseInt(a[column+app_state.columnNameSeparator+index]);
+                          const bSegmentInt = parseInt(b[column+app_state.columnNameSeparator+index]);
                           const result = order ? (aSegmentInt > bSegmentInt) : (aSegmentInt < bSegmentInt);
                           return result ? 1 : -1;
                         });
                         setFinalData(data);
                       } else {
-                        setFinalData(_.orderBy(finalData, column, order ? 'asc' : 'desc'));
+                        setFinalData(_.orderBy(finalData, column+app_state.columnNameSeparator+index, order ? 'asc' : 'desc'));
                       }
                       setOrder(!order);
                       setColumnClicked(column);
@@ -511,9 +511,7 @@ export default function CustomizedTables({
                         }
                         return addLinks && !idx ? (
                           <StyledTableCell key={idx}>
-                            <a className={classes.clickable} onClick={()=>{
-                              history.push(`${encodeURI(`${url}${encodeURIComponent(cell)}`)}`)
-                            }}>{cell}</a>
+                            <Link to={`${encodeURI(`${url}${encodeURIComponent(cell)}`)}`}>{cell}</Link>
                           </StyledTableCell>
                         ) : (
                           <StyledTableCell
@@ -521,7 +519,7 @@ export default function CustomizedTables({
                             className={isCellClickable ? classes.isCellClickable : (isSticky ? classes.isSticky : '')}
                             onClick={() => {cellClickCallback && cellClickCallback(cell);}}
                           >
-                            {makeCell(cell, index)}
+                            {makeCell(cell || '--', index)}
                           </StyledTableCell>
                         );
                       })}

@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import org.apache.pinot.spi.utils.DataSizeUtils;
 import org.apache.pinot.spi.utils.EqualityUtils;
@@ -58,12 +59,13 @@ public class StreamConfig {
 
   private static final String SIMPLE_CONSUMER_TYPE_STRING = "simple";
 
+  private static final double CONSUMPTION_RATE_LIMIT_NOT_SPECIFIED = -1;
+
   private final String _type;
   private final String _topicName;
   private final String _tableNameWithType;
   private final List<ConsumerType> _consumerTypes = new ArrayList<>();
   private final String _consumerFactoryClassName;
-  private final OffsetCriteria _offsetCriteria;
   private final String _decoderClass;
   private final Map<String, String> _decoderProperties = new HashMap<>();
 
@@ -77,7 +79,12 @@ public class StreamConfig {
 
   private final String _groupId;
 
+  private final double _topicConsumptionRateLimit;
+
   private final Map<String, String> _streamConfigMap = new HashMap<>();
+
+  // Allow overriding it to use different offset criteria
+  private OffsetCriteria _offsetCriteria;
 
   /**
    * Initializes a StreamConfig using the map of stream configs from the table config
@@ -184,6 +191,9 @@ public class StreamConfig {
     String groupIdKey = StreamConfigProperties.constructStreamProperty(_type, StreamConfigProperties.GROUP_ID);
     _groupId = streamConfigMap.get(groupIdKey);
 
+    String rate = streamConfigMap.get(StreamConfigProperties.TOPIC_CONSUMPTION_RATE_LIMIT);
+    _topicConsumptionRateLimit = rate != null ? Double.parseDouble(rate) : CONSUMPTION_RATE_LIMIT_NOT_SPECIFIED;
+
     _streamConfigMap.putAll(streamConfigMap);
   }
 
@@ -284,6 +294,10 @@ public class StreamConfig {
     return _offsetCriteria;
   }
 
+  public void setOffsetCriteria(OffsetCriteria offsetCriteria) {
+    _offsetCriteria = offsetCriteria;
+  }
+
   public String getDecoderClass() {
     return _decoderClass;
   }
@@ -320,6 +334,11 @@ public class StreamConfig {
     return _groupId;
   }
 
+  public Optional<Double> getTopicConsumptionRateLimit() {
+    return _topicConsumptionRateLimit == CONSUMPTION_RATE_LIMIT_NOT_SPECIFIED ? Optional.empty()
+        : Optional.of(_topicConsumptionRateLimit);
+  }
+
   public String getTableNameWithType() {
     return _tableNameWithType;
   }
@@ -336,8 +355,8 @@ public class StreamConfig {
         + _fetchTimeoutMillis + ", _flushThresholdRows=" + _flushThresholdRows + ", _flushThresholdTimeMillis="
         + _flushThresholdTimeMillis + ", _flushSegmentDesiredSizeBytes=" + _flushThresholdSegmentSizeBytes
         + ", _flushAutotuneInitialRows=" + _flushAutotuneInitialRows + ", _decoderClass='" + _decoderClass + '\''
-        + ", _decoderProperties=" + _decoderProperties + ", _groupId='" + _groupId + ", _tableNameWithType='"
-        + _tableNameWithType + '}';
+        + ", _decoderProperties=" + _decoderProperties + ", _groupId='" + _groupId + "', _topicConsumptionRateLimit="
+        + _topicConsumptionRateLimit + ", _tableNameWithType='" + _tableNameWithType + '}';
   }
 
   @Override
@@ -364,6 +383,7 @@ public class StreamConfig {
         .isEqual(_offsetCriteria, that._offsetCriteria) && EqualityUtils.isEqual(_decoderClass, that._decoderClass)
         && EqualityUtils.isEqual(_decoderProperties, that._decoderProperties) && EqualityUtils
         .isEqual(_groupId, that._groupId) && EqualityUtils.isEqual(_tableNameWithType, that._tableNameWithType)
+        && EqualityUtils.isEqual(_topicConsumptionRateLimit, that._topicConsumptionRateLimit)
         && EqualityUtils.isEqual(_streamConfigMap, that._streamConfigMap);
   }
 
@@ -383,6 +403,7 @@ public class StreamConfig {
     result = EqualityUtils.hashCodeOf(result, _decoderClass);
     result = EqualityUtils.hashCodeOf(result, _decoderProperties);
     result = EqualityUtils.hashCodeOf(result, _groupId);
+    result = EqualityUtils.hashCodeOf(result, _topicConsumptionRateLimit);
     result = EqualityUtils.hashCodeOf(result, _streamConfigMap);
     result = EqualityUtils.hashCodeOf(result, _tableNameWithType);
     return result;
