@@ -24,7 +24,7 @@ public class GeoLite {
             asnReader = new DatabaseReader.Builder(asnIs).build();
             cityReader = new DatabaseReader.Builder(cityIs).build();
         }catch (Exception e){
-            logger.error("load GeoLite lib files error: ", e);
+            //logger.error("load GeoLite lib files error: ", e);
         }
     }
 
@@ -35,7 +35,7 @@ public class GeoLite {
             AsnResponse response = asnReader.asn(ipAddress);
             return response.toJson();
         }catch (Exception e){
-            logger.error("GeoLite getAsnJson error: ", e);
+            //logger.error("GeoLite getAsnJson error: ", e);
         }
         return "{}";
     }
@@ -47,7 +47,7 @@ public class GeoLite {
             AsnResponse response = asnReader.asn(ipAddress);
             return String.valueOf(response.getAutonomousSystemNumber());
         }catch (Exception e){
-            logger.error("GeoLite getAsnNumber error: ", e);
+            //logger.error("GeoLite getAsnNumber error: ", e);
         }
         return "";
     }
@@ -59,7 +59,7 @@ public class GeoLite {
             AsnResponse response = asnReader.asn(ipAddress);
             return response.getAutonomousSystemOrganization();
         }catch (Exception e){
-            logger.error("GeoLite getAsnName error: ", e);
+            //logger.error("GeoLite getAsnName error: ", e);
         }
         return "";
     }
@@ -71,7 +71,7 @@ public class GeoLite {
             CityResponse response = cityReader.city(ipAddress);
             return response.toJson();
         }catch (Exception e){
-            logger.error("GeoLite getLocationJson error: ", e);
+            //logger.error("GeoLite getLocationJson error: ", e);
         }
         return "{}";
     }
@@ -83,7 +83,7 @@ public class GeoLite {
             CityResponse response = cityReader.city(ipAddress);
             return response.getContinent().getName();
         }catch (Exception e){
-            logger.error("GeoLite getContinent error: ", e);
+            //logger.error("GeoLite getContinent error: ", e);
         }
         return "";
     }
@@ -95,7 +95,7 @@ public class GeoLite {
             CityResponse response = cityReader.city(ipAddress);
             return response.getContinent().getCode();
         }catch (Exception e){
-            logger.error("GeoLite getContinentCode error: ", e);
+            //logger.error("GeoLite getContinentCode error: ", e);
         }
         return "";
     }
@@ -107,7 +107,7 @@ public class GeoLite {
             CityResponse response = cityReader.city(ipAddress);
             return response.getCountry().getName();
         }catch (Exception e){
-            logger.error("GeoLite getCountry error: ", e);
+            //logger.error("GeoLite getCountry error: ", e);
         }
         return "";
     }
@@ -119,7 +119,7 @@ public class GeoLite {
             CityResponse response = cityReader.city(ipAddress);
             return response.getCountry().getIsoCode();
         }catch (Exception e){
-            logger.error("GeoLite getCountryCode error: ", e);
+            //logger.error("GeoLite getCountryCode error: ", e);
         }
         return "";
     }
@@ -131,7 +131,7 @@ public class GeoLite {
             CityResponse response = cityReader.city(ipAddress);
             return response.getCity().getName();
         }catch (Exception e){
-            logger.error("GeoLite getCity error: ", e);
+            //logger.error("GeoLite getCity error: ", e);
         }
         return "";
     }
@@ -143,7 +143,7 @@ public class GeoLite {
             CityResponse response = cityReader.city(ipAddress);
             return response.getLocation().getTimeZone();
         }catch (Exception e){
-            logger.error("GeoLite getTimeZone error: ", e);
+            //logger.error("GeoLite getTimeZone error: ", e);
         }
         return "";
     }
@@ -155,7 +155,7 @@ public class GeoLite {
             CityResponse response = cityReader.city(ipAddress);
             return response.getLocation().getLatitude();
         }catch (Exception e){
-            logger.error("GeoLite getLatitude error: ", e);
+            //logger.error("GeoLite getLatitude error: ", e);
         }
         return 0.0;
     }
@@ -167,7 +167,7 @@ public class GeoLite {
             CityResponse response = cityReader.city(ipAddress);
             return response.getLocation().getLongitude();
         }catch (Exception e){
-            logger.error("GeoLite getLongitude error: ", e);
+            //logger.error("GeoLite getLongitude error: ", e);
         }
         return 0.0;
     }
@@ -179,7 +179,7 @@ public class GeoLite {
             CityResponse response = cityReader.city(ipAddress);
             return response.getPostal().getCode();
         }catch (Exception e){
-            logger.error("GeoLite getPostalCode error: ", e);
+            //logger.error("GeoLite getPostalCode error: ", e);
         }
         return "";
     }
@@ -191,7 +191,7 @@ public class GeoLite {
             CityResponse response = cityReader.city(ipAddress);
             return response.getMostSpecificSubdivision().getName();
         }catch (Exception e){
-            logger.error("GeoLite getSubDivisionName error: ", e);
+            //logger.error("GeoLite getSubDivisionName error: ", e);
         }
         return "";
     }
@@ -203,10 +203,12 @@ public class GeoLite {
             CityResponse response = cityReader.city(ipAddress);
             return response.getMostSpecificSubdivision().getIsoCode();
         }catch (Exception e){
-            logger.error("GeoLite getSubDivisionCod error: ", e);
+            //logger.error("GeoLite getSubDivisionCod error: ", e);
         }
         return "";
     }
 
-
+    public static void main(String[] args){
+        System.out.println(getCity("202.19.227.200"));
+    }
 }

@@ -2,7 +2,6 @@ package org.apache.pinot.common.function;
 
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.spi.cache.Cache;
-
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
