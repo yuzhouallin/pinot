@@ -24,7 +24,7 @@ public class GeoLite {
             asnReader = new DatabaseReader.Builder(asnIs).build();
             cityReader = new DatabaseReader.Builder(cityIs).build();
         }catch (Exception e){
-            //logger.error("load GeoLite lib files error: ", e);
+            logger.error("load GeoLite lib files error: ", e);
         }
     }
 
@@ -37,7 +37,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getAsnJson error: ", e);
         }
-        return "{}";
+        return null;
     }
 
     @ScalarFunction
@@ -49,7 +49,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getAsnNumber error: ", e);
         }
-        return "";
+        return null;
     }
 
     @ScalarFunction
@@ -61,7 +61,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getAsnName error: ", e);
         }
-        return "";
+        return null;
     }
 
     @ScalarFunction
@@ -73,7 +73,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getLocationJson error: ", e);
         }
-        return "{}";
+        return null;
     }
 
     @ScalarFunction
@@ -85,7 +85,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getContinent error: ", e);
         }
-        return "";
+        return null;
     }
 
     @ScalarFunction
@@ -97,7 +97,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getContinentCode error: ", e);
         }
-        return "";
+        return null;
     }
 
     @ScalarFunction
@@ -109,7 +109,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getCountry error: ", e);
         }
-        return "";
+        return null;
     }
 
     @ScalarFunction
@@ -121,7 +121,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getCountryCode error: ", e);
         }
-        return "";
+        return null;
     }
 
     @ScalarFunction
@@ -133,7 +133,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getCity error: ", e);
         }
-        return "";
+        return null;
     }
 
     @ScalarFunction
@@ -145,7 +145,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getTimeZone error: ", e);
         }
-        return "";
+        return null;
     }
 
     @ScalarFunction
@@ -157,7 +157,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getLatitude error: ", e);
         }
-        return 0.0;
+        return null;
     }
 
     @ScalarFunction
@@ -169,7 +169,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getLongitude error: ", e);
         }
-        return 0.0;
+        return null;
     }
 
     @ScalarFunction
@@ -181,7 +181,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getPostalCode error: ", e);
         }
-        return "";
+        return null;
     }
 
     @ScalarFunction
@@ -193,7 +193,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getSubDivisionName error: ", e);
         }
-        return "";
+        return null;
     }
 
     @ScalarFunction
@@ -205,10 +205,7 @@ public class GeoLite {
         }catch (Exception e){
             //logger.error("GeoLite getSubDivisionCod error: ", e);
         }
-        return "";
+        return null;
     }
 
-    public static void main(String[] args){
-        System.out.println(getCity("202.19.227.200"));
-    }
 }
