@@ -99,6 +99,8 @@ public class MinionConstants {
     public static final String MAX_NUM_RECORDS_PER_SEGMENT_KEY = "maxNumRecordsPerSegment";
     public static final String MAX_NUM_PARALLEL_BUCKETS = "maxNumParallelBuckets";
     public static final String SEGMENT_NAME_PREFIX_KEY = "segmentNamePrefix";
+    public static final String SEGMENT_NAME_POSTFIX_KEY = "segmentNamePostfix";
+    public static final String FIXED_SEGMENT_NAME_KEY = "fixedSegmentName";
   }
 
   public static class MergeRollupTask extends MergeTask {

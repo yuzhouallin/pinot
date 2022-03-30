@@ -31,7 +31,7 @@
 
   <groupId>org.apache.pinot</groupId>
   <artifactId>pinot</artifactId>
-  <version>0.10.0-SNAPSHOT</version>
+  <version>0.11.0-SNAPSHOT</version>
   <packaging>pom</packaging>
   <name>Pinot</name>
   <description>A realtime distributed OLAP datastore</description>
@@ -95,7 +95,7 @@
   </mailingLists>
 
   <scm>
-    <developerConnection>scm:git:git@github.com:apache/incubator-pinot.git</developerConnection>
+    <developerConnection>scm:git:git@github.com:apache/pinot.git</developerConnection>
     <tag>HEAD</tag>
   </scm>
 
@@ -132,7 +132,7 @@
     <antlr.version>4.6</antlr.version>
     <jsonpath.version>2.7.0</jsonpath.version>
     <quartz.version>2.3.2</quartz.version>
-    <calcite.version>1.19.0</calcite.version>
+    <calcite.version>1.29.0</calcite.version>
     <lucene.version>8.2.0</lucene.version>
     <reflections.version>0.9.9</reflections.version>
     <!-- commons-configuration, hadoop-common, hadoop-client use commons-lang -->
@@ -147,8 +147,7 @@
     <zstd-jni.version>1.4.9-5</zstd-jni.version>
     <lz4-java.version>1.7.1</lz4-java.version>
     <log4j.version>2.17.1</log4j.version>
-    <netty.version>4.1.54.Final</netty.version>
-    <netty-tcnative.version>2.0.36.Final</netty-tcnative.version>
+    <netty.version>4.1.74.Final</netty.version>
     <reactivestreams.version>1.0.3</reactivestreams.version>
     <jts.version>1.16.1</jts.version>
     <h3.version>3.0.3</h3.version>
@@ -163,7 +162,7 @@
     To change kafka connector dependency, we only need to update this version number config.
     TODO: figure out a way to inject kafka dependency instead of explicitly setting the kafka module dependency -->
     <kafka.version>2.0</kafka.version>
-    <protobuf.version>3.12.0</protobuf.version>
+    <protobuf.version>3.19.2</protobuf.version>
     <grpc.version>1.41.0</grpc.version>
 
     <!-- Checkstyle violation prop.-->
@@ -299,17 +298,17 @@
       <dependency>
         <groupId>org.apache.httpcomponents</groupId>
         <artifactId>httpmime</artifactId>
-        <version>4.5.3</version>
+        <version>4.5.13</version>
       </dependency>
       <dependency>
         <groupId>org.apache.httpcomponents</groupId>
         <artifactId>httpclient</artifactId>
-        <version>4.5.9</version>
+        <version>4.5.13</version>
       </dependency>
       <dependency>
         <groupId>org.apache.httpcomponents</groupId>
         <artifactId>httpcore</artifactId>
-        <version>4.4.9</version>
+        <version>4.4.13</version>
       </dependency>
       <dependency>
         <groupId>org.apache.pinot</groupId>
@@ -471,7 +470,7 @@
       <dependency>
         <groupId>commons-collections</groupId>
         <artifactId>commons-collections</artifactId>
-        <version>3.2.1</version>
+        <version>3.2.2</version>
       </dependency>
       <dependency>
         <groupId>commons-configuration</groupId>
@@ -486,7 +485,7 @@
       <dependency>
         <groupId>commons-io</groupId>
         <artifactId>commons-io</artifactId>
-        <version>2.4</version>
+        <version>2.11.0</version>
       </dependency>
 
       <!-- zkclient & helix-core use netty -->
@@ -615,12 +614,12 @@
       <dependency>
         <groupId>org.apache.commons</groupId>
         <artifactId>commons-compress</artifactId>
-        <version>1.20</version>
+        <version>1.21</version>
       </dependency>
       <dependency>
         <groupId>org.apache.thrift</groupId>
         <artifactId>libthrift</artifactId>
-        <version>0.12.0</version>
+        <version>0.15.0</version>
       </dependency>
       <dependency>
         <groupId>javax.servlet</groupId>
@@ -726,7 +725,7 @@
       <dependency>
         <groupId>org.yaml</groupId>
         <artifactId>snakeyaml</artifactId>
-        <version>1.16</version>
+        <version>1.30</version>
       </dependency>
       <dependency>
         <groupId>org.xerial.larray</groupId>
@@ -756,7 +755,7 @@
       <dependency>
         <groupId>commons-beanutils</groupId>
         <artifactId>commons-beanutils</artifactId>
-        <version>1.8.3</version>
+        <version>1.9.4</version>
       </dependency>
       <dependency>
         <groupId>commons-codec</groupId>
@@ -1094,6 +1093,10 @@
           <exclusion>
             <groupId>com.google.code.findbugs</groupId>
             <artifactId>jsr305</artifactId>
+          </exclusion>
+          <exclusion>
+            <groupId>com.google.errorprone</groupId>
+            <artifactId>error_prone_annotations</artifactId>
           </exclusion>
         </exclusions>
       </dependency>
@@ -1608,6 +1611,11 @@
             </goals>
           </execution>
         </executions>
+        <configuration>
+          <includes>
+            <include>org/apache/pinot/**/*</include>
+          </includes>
+        </configuration>
       </plugin>
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
@@ -1814,7 +1822,7 @@
 
             <!-- Test output -->
             <exclude>**/test-output/**</exclude>
-            
+
             <!-- MISC -->
             <exclude>**/.factorypath</exclude>
           </excludes>

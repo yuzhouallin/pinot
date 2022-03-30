@@ -47,6 +47,7 @@ import org.apache.pinot.common.metadata.segment.SegmentZKMetadata;
 import org.apache.pinot.common.utils.FileUploadDownloadClient;
 import org.apache.pinot.common.utils.ServiceStatus;
 import org.apache.pinot.common.utils.SimpleHttpResponse;
+import org.apache.pinot.common.utils.http.HttpClient;
 import org.apache.pinot.segment.spi.index.startree.AggregationFunctionColumnPair;
 import org.apache.pinot.spi.config.table.IndexingConfig;
 import org.apache.pinot.spi.config.table.QueryConfig;
@@ -67,6 +68,8 @@ import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
+import static org.apache.pinot.common.function.scalar.StringFunctions.decodeUrl;
+import static org.apache.pinot.common.function.scalar.StringFunctions.encodeUrl;
 import static org.testng.Assert.*;
 
 
@@ -261,7 +264,7 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
       fail();
     } catch (IOException e) {
       // Should get response code 400 (BAD_REQUEST)
-      assertTrue(e.getMessage().startsWith("Server returned HTTP response code: 400"));
+      assertTrue(e.getMessage().contains("Got error status code: 400"));
     }
   }
 
@@ -382,7 +385,7 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
       File segmentTarFile = segmentTarFiles[0];
       try {
         fileUploadDownloadClient.uploadSegment(uploadSegmentHttpURI, segmentTarFile.getName(), segmentTarFile, headers,
-            parameters, FileUploadDownloadClient.DEFAULT_SOCKET_TIMEOUT_MS);
+            parameters, HttpClient.DEFAULT_SOCKET_TIMEOUT_MS);
         fail();
       } catch (HttpErrorStatusException e) {
         assertEquals(e.getStatusCode(), HttpStatus.SC_GONE);
@@ -392,14 +395,14 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
       // Upload segment
       SimpleHttpResponse response =
           fileUploadDownloadClient.uploadSegment(uploadSegmentHttpURI, segmentTarFile.getName(), segmentTarFile, null,
-              parameters, FileUploadDownloadClient.DEFAULT_SOCKET_TIMEOUT_MS);
+              parameters, HttpClient.DEFAULT_SOCKET_TIMEOUT_MS);
       assertEquals(response.getStatusCode(), HttpStatus.SC_OK);
       List<SegmentZKMetadata> segmentsZKMetadata = _helixResourceManager.getSegmentsZKMetadata(offlineTableName);
       assertEquals(segmentsZKMetadata.size(), 1);
 
       // Refresh existing segment
       response = fileUploadDownloadClient.uploadSegment(uploadSegmentHttpURI, segmentTarFile.getName(), segmentTarFile,
-          headers, parameters, FileUploadDownloadClient.DEFAULT_SOCKET_TIMEOUT_MS);
+          headers, parameters, HttpClient.DEFAULT_SOCKET_TIMEOUT_MS);
       assertEquals(response.getStatusCode(), HttpStatus.SC_OK);
       segmentsZKMetadata = _helixResourceManager.getSegmentsZKMetadata(offlineTableName);
       assertEquals(segmentsZKMetadata.size(), 1);
@@ -524,13 +527,31 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
   }
 
   @Test
+  public void testUrlFunc()
+      throws Exception {
+    String sqlQuery = "SELECT encodeUrl('key1=value 1&key2=value@!$2&key3=value%3'), "
+        + "decodeUrl('key1%3Dvalue+1%26key2%3Dvalue%40%21%242%26key3%3Dvalue%253') FROM myTable";
+    JsonNode response = postSqlQuery(sqlQuery, _brokerBaseApiUrl);
+    String encodedString = response.get("resultTable").get("rows").get(0).get(0).asText();
+    String expectedUrlStr = encodeUrl("key1=value 1&key2=value@!$2&key3=value%3");
+    ;
+    assertEquals(encodedString, expectedUrlStr);
+
+    String decodedString = response.get("resultTable").get("rows").get(0).get(1).asText();
+    expectedUrlStr = decodeUrl("key1%3Dvalue+1%26key2%3Dvalue%40%21%242%26key3%3Dvalue%253");
+    ;
+    assertEquals(decodedString, expectedUrlStr);
+  }
+
+  @Test
   public void testLiteralOnlyFunc()
       throws Exception {
     long currentTsMin = System.currentTimeMillis();
     long oneHourAgoTsMin = currentTsMin - ONE_HOUR_IN_MS;
     String sqlQuery =
         "SELECT 1, now() as currentTs, ago('PT1H') as oneHourAgoTs, 'abc', toDateTime(now(), 'yyyy-MM-dd z') as "
-            + "today, now(), ago('PT1H')";
+            + "today, now(), ago('PT1H'), encodeUrl('key1=value 1&key2=value@!$2&key3=value%3') as encodedUrl, "
+            + "decodeUrl('key1%3Dvalue+1%26key2%3Dvalue%40%21%242%26key3%3Dvalue%253') as decodedUrl";
     JsonNode response = postSqlQuery(sqlQuery, _brokerBaseApiUrl);
     long currentTsMax = System.currentTimeMillis();
     long oneHourAgoTsMax = currentTsMax - ONE_HOUR_IN_MS;
@@ -542,6 +563,8 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     assertEquals(response.get("resultTable").get("dataSchema").get("columnNames").get(4).asText(), "today");
     String nowColumnName = response.get("resultTable").get("dataSchema").get("columnNames").get(5).asText();
     String oneHourAgoColumnName = response.get("resultTable").get("dataSchema").get("columnNames").get(6).asText();
+    assertEquals(response.get("resultTable").get("dataSchema").get("columnNames").get(7).asText(), "encodedUrl");
+    assertEquals(response.get("resultTable").get("dataSchema").get("columnNames").get(8).asText(), "decodedUrl");
     assertTrue(Long.parseLong(nowColumnName) > currentTsMin);
     assertTrue(Long.parseLong(nowColumnName) < currentTsMax);
     assertTrue(Long.parseLong(oneHourAgoColumnName) > oneHourAgoTsMin);
@@ -554,6 +577,8 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     assertEquals(response.get("resultTable").get("dataSchema").get("columnDataTypes").get(4).asText(), "STRING");
     assertEquals(response.get("resultTable").get("dataSchema").get("columnDataTypes").get(5).asText(), "LONG");
     assertEquals(response.get("resultTable").get("dataSchema").get("columnDataTypes").get(6).asText(), "LONG");
+    assertEquals(response.get("resultTable").get("dataSchema").get("columnDataTypes").get(7).asText(), "STRING");
+    assertEquals(response.get("resultTable").get("dataSchema").get("columnDataTypes").get(8).asText(), "STRING");
 
     int first = response.get("resultTable").get("rows").get(0).get(0).asInt();
     long second = response.get("resultTable").get("rows").get(0).get(1).asLong();
@@ -573,6 +598,10 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     assertEquals(nowValue, Long.parseLong(nowColumnName));
     long oneHourAgoValue = response.get("resultTable").get("rows").get(0).get(6).asLong();
     assertEquals(oneHourAgoValue, Long.parseLong(oneHourAgoColumnName));
+    assertEquals(response.get("resultTable").get("rows").get(0).get(7).asText(),
+        "key1%3Dvalue+1%26key2%3Dvalue%40%21%242%26key3%3Dvalue%253");
+    assertEquals(response.get("resultTable").get("rows").get(0).get(8).asText(),
+        "key1=value 1&key2=value@!$2&key3=value%3");
   }
 
   @Test(dependsOnMethods = "testBloomFilterTriggering")
@@ -660,26 +689,18 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     assertEquals(getTableSize(getTableName()), _tableSizeAfterRemovingIndex);
   }
 
-  /** Check if server returns error response quickly without timing out Broker. */
+  /**
+   * Check if server returns error response quickly without timing out Broker.
+   */
   @Test
   public void testServerErrorWithBrokerTimeout()
       throws Exception {
-    // Set query timeout
-    long queryTimeout = 5000;
-    TableConfig tableConfig = getOfflineTableConfig();
-    tableConfig.setQueryConfig(new QueryConfig(queryTimeout));
-    updateTableConfig(tableConfig);
-
-    long startTime = System.currentTimeMillis();
+    long startTimeMs = System.currentTimeMillis();
     // The query below will fail execution due to JSON_MATCH on column without json index
     JsonNode queryResponse = postSqlQuery("SELECT count(*) FROM mytable WHERE JSON_MATCH(Dest, '$=123')");
-
-    assertTrue(System.currentTimeMillis() - startTime < queryTimeout);
+    // NOTE: Broker timeout is 60s
+    assertTrue(System.currentTimeMillis() - startTimeMs < 60_000L);
     assertTrue(queryResponse.get("exceptions").get(0).get("message").toString().startsWith("\"QueryExecutionError"));
-
-    // Remove timeout
-    tableConfig.setQueryConfig(null);
-    updateTableConfig(tableConfig);
   }
 
   @Test
@@ -844,6 +865,7 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     assertEquals(queryResponse.get("selectionResults").get("columns").size(), 92);
 
     testNewAddedColumns();
+    testExpressionOverride();
 
     reloadWithMissingColumns();
     queryResponse = postQuery(SELECT_STAR_QUERY);
@@ -856,6 +878,40 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     assertEquals(queryResponse.get("selectionResults").get("columns").size(), 79);
 
     _tableSizeAfterRemovingIndex = getTableSize(getTableName());
+  }
+
+  @Test
+  public void testDisableGroovyQueryTableConfigOverride()
+      throws Exception {
+    String groovyQuery = "SELECT GROOVY('{\"returnType\":\"STRING\",\"isSingleValue\":true}', "
+        + "'arg0 + arg1', FlightNum, Origin) FROM myTable";
+    TableConfig tableConfig = getOfflineTableConfig();
+    tableConfig.setQueryConfig(new QueryConfig(true));
+    updateTableConfig(tableConfig);
+
+    TestUtils.waitForCondition(aVoid -> {
+      try {
+        postSqlQuery(groovyQuery);
+        return false;
+      } catch (Exception e) {
+        // expected
+        return true;
+      }
+    }, 60_000L, "Failed to reject Groovy query with table override");
+
+    // Remove query config
+    tableConfig.setQueryConfig(null);
+    updateTableConfig(tableConfig);
+
+    TestUtils.waitForCondition(aVoid -> {
+      try {
+        postSqlQuery(groovyQuery);
+        // Query should not throw exception
+        return true;
+      } catch (Exception e) {
+        return false;
+      }
+    }, 60_000L, "Failed to accept Groovy query without query table config override");
   }
 
   private void reloadWithExtraColumns()
@@ -1052,6 +1108,48 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
     assertEquals(groupByResult.get("group").get(1).asLong(), Long.MIN_VALUE);
     assertEquals((float) groupByResult.get("group").get(2).asDouble(), Float.NEGATIVE_INFINITY);
     assertEquals(groupByResult.get("group").get(3).asDouble(), Double.NEGATIVE_INFINITY);
+  }
+
+  private void testExpressionOverride()
+      throws Exception {
+    String query = "SELECT COUNT(*) FROM mytable WHERE DaysSinceEpoch * 24 * 3600 = 1411862400";
+
+    // Initially there is no expression override
+    {
+      JsonNode response = postSqlQuery(query);
+      assertEquals(response.get("numSegmentsProcessed").asInt(), 12);
+      assertEquals(response.get("numEntriesScannedInFilter").asInt(), getCountStarResult());
+    }
+
+    // Add expression override
+    TableConfig tableConfig = getOfflineTableConfig();
+    tableConfig.setQueryConfig(new QueryConfig(
+        Collections.singletonMap("times(times(DaysSinceEpoch, 24), 3600)", "NewAddedDerivedSecondsSinceEpoch")));
+    updateTableConfig(tableConfig);
+
+    TestUtils.waitForCondition(aVoid -> {
+      try {
+        JsonNode response = postSqlQuery(query);
+        return response.get("numSegmentsProcessed").asInt() == 1
+            && response.get("numEntriesScannedInFilter").asInt() == 0;
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }, 60_000L, "Failed to add expression override");
+
+    // Remove expression override
+    tableConfig.setQueryConfig(null);
+    updateTableConfig(tableConfig);
+
+    TestUtils.waitForCondition(aVoid -> {
+      try {
+        JsonNode response = postSqlQuery(query);
+        return response.get("numSegmentsProcessed").asInt() == 12
+            && response.get("numEntriesScannedInFilter").asInt() == getCountStarResult();
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }, 60_000L, "Failed to remove expression override");
   }
 
   @Test
@@ -1852,6 +1950,29 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
         + "[\"NO_MATCHING_SEGMENT\",1,0]]}");
   }
 
+  /** Test to make sure we are properly handling string comparisons in predicates. */
+  @Test
+  public void testStringComparisonInFilter()
+      throws Exception {
+    // compare two string columns.
+    String query1 = "SELECT count(*) FROM mytable WHERE OriginState = DestState";
+    String response1 = postSqlQuery(query1, _brokerBaseApiUrl).get("resultTable").toString();
+    assertEquals(response1,
+        "{\"dataSchema\":{\"columnNames\":[\"count(*)\"],\"columnDataTypes\":[\"LONG\"]}," + "\"rows\":[[14011]]}");
+
+    // compare string function with string column.
+    String query2 = "SELECT count(*) FROM mytable WHERE trim(OriginState) = DestState";
+    String response2 = postSqlQuery(query2, _brokerBaseApiUrl).get("resultTable").toString();
+    assertEquals(response2,
+        "{\"dataSchema\":{\"columnNames\":[\"count(*)\"],\"columnDataTypes\":[\"LONG\"]}," + "\"rows\":[[14011]]}");
+
+    // compare string function with string function.
+    String query3 = "SELECT count(*) FROM mytable WHERE substr(OriginState, 0, 1) = substr(DestState, 0, 1)";
+    String response3 = postSqlQuery(query3, _brokerBaseApiUrl).get("resultTable").toString();
+    assertEquals(response3,
+        "{\"dataSchema\":{\"columnNames\":[\"count(*)\"],\"columnDataTypes\":[\"LONG\"]}," + "\"rows\":[[19755]]}");
+  }
+
   @Test
   @Override
   public void testHardcodedServerPartitionedSqlQueries()
@@ -1862,13 +1983,13 @@ public class OfflineClusterIntegrationTest extends BaseClusterIntegrationTestSet
   @Test
   public void testAggregateMetadataAPI()
       throws IOException {
-    JsonNode oneSVColumnResponse = JsonUtils
-        .stringToJsonNode(sendGetRequest(_controllerBaseApiUrl + "/tables/mytable/metadata?columns=DestCityMarketID"));
+    JsonNode oneSVColumnResponse = JsonUtils.stringToJsonNode(
+        sendGetRequest(_controllerBaseApiUrl + "/tables/mytable/metadata?columns=DestCityMarketID"));
     // DestCityMarketID is a SV column
     validateMetadataResponse(oneSVColumnResponse, 1, 0);
 
-    JsonNode oneMVColumnResponse = JsonUtils
-        .stringToJsonNode(sendGetRequest(_controllerBaseApiUrl + "/tables/mytable/metadata?columns=DivLongestGTimes"));
+    JsonNode oneMVColumnResponse = JsonUtils.stringToJsonNode(
+        sendGetRequest(_controllerBaseApiUrl + "/tables/mytable/metadata?columns=DivLongestGTimes"));
     // DivLongestGTimes is a MV column
     validateMetadataResponse(oneMVColumnResponse, 1, 1);
 
