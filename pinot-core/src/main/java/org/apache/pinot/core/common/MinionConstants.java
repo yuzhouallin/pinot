@@ -87,6 +87,7 @@ public class MinionConstants {
     // Time handling config
     public static final String WINDOW_START_MS_KEY = "windowStartMs";
     public static final String WINDOW_END_MS_KEY = "windowEndMs";
+    public static final String NEGATE_WINDOW_FILTER = "negateWindowFilter";
     public static final String ROUND_BUCKET_TIME_PERIOD_KEY = "roundBucketTimePeriod";
     public static final String PARTITION_BUCKET_TIME_PERIOD_KEY = "partitionBucketTimePeriod";
 
@@ -101,6 +102,11 @@ public class MinionConstants {
     public static final String SEGMENT_NAME_PREFIX_KEY = "segmentNamePrefix";
     public static final String SEGMENT_NAME_POSTFIX_KEY = "segmentNamePostfix";
     public static final String FIXED_SEGMENT_NAME_KEY = "fixedSegmentName";
+
+    // This field is set in segment metadata custom map to indicate if the segment is safe to be merged.
+    // Tasks can take use of this field to coordinate with the merge task. By default, segment is safe
+    // to merge, so existing segments w/o this field can be merged just as before.
+    public static final String SEGMENT_ZK_METADATA_SHOULD_NOT_MERGE_KEY = "shouldNotMerge";
   }
 
   public static class MergeRollupTask extends MergeTask {

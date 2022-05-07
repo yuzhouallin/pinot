@@ -37,6 +37,7 @@ import org.testng.annotations.Test;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.testng.AssertJUnit.fail;
 
 
 public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
@@ -65,6 +66,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     // , ...
     //
     when(_tableManager.getPrimaryKeyColumns()).thenReturn(Arrays.asList("teamID"));
+    when(_tableManager.isPopulated()).thenReturn(true);
     when(_tableManager.getColumnFieldSpec("teamID"))
         .thenReturn(new DimensionFieldSpec("teamID", FieldSpec.DataType.STRING, true));
     when(_tableManager.getColumnFieldSpec("teamName"))
@@ -113,7 +115,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
       throws Exception {
     // Success case
     ExpressionContext expression = RequestContextUtils
-        .getExpressionFromSQL(String.format("lookup('baseballTeams','teamName','teamID',%s)", STRING_SV_COLUMN));
+        .getExpression(String.format("lookup('baseballTeams','teamName','teamID',%s)", STRING_SV_COLUMN));
     TransformFunction transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     Assert.assertTrue(transformFunction instanceof LookupTransformFunction);
     Assert.assertEquals(transformFunction.getName(), LookupTransformFunction.FUNCTION_NAME);
@@ -121,13 +123,13 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     // Wrong number of arguments
     Assert.assertThrows(BadQueryRequestException.class, () -> {
       TransformFunctionFactory
-          .get(RequestContextUtils.getExpressionFromSQL(String.format("lookup('baseballTeams','teamName','teamID')")),
+          .get(RequestContextUtils.getExpression(String.format("lookup('baseballTeams','teamName','teamID')")),
               _dataSourceMap);
     });
 
     // Wrong number of join keys
     Assert.assertThrows(BadQueryRequestException.class, () -> {
-      TransformFunctionFactory.get(RequestContextUtils.getExpressionFromSQL(
+      TransformFunctionFactory.get(RequestContextUtils.getExpression(
           String.format("lookup('baseballTeams','teamName','teamID', %s, 'danglingKey')", STRING_SV_COLUMN)),
           _dataSourceMap);
     });
@@ -135,20 +137,20 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     // Non literal tableName argument
     Assert.assertThrows(BadQueryRequestException.class, () -> {
       TransformFunctionFactory.get(RequestContextUtils
-              .getExpressionFromSQL(String.format("lookup(%s,'teamName','teamID', %s)", STRING_SV_COLUMN,
+              .getExpression(String.format("lookup(%s,'teamName','teamID', %s)", STRING_SV_COLUMN,
                   INT_SV_COLUMN)),
           _dataSourceMap);
     });
 
     // Non literal lookup columnName argument
     Assert.assertThrows(BadQueryRequestException.class, () -> {
-      TransformFunctionFactory.get(RequestContextUtils.getExpressionFromSQL(
+      TransformFunctionFactory.get(RequestContextUtils.getExpression(
           String.format("lookup('baseballTeams',%s,'teamID',%s)", STRING_SV_COLUMN, INT_SV_COLUMN)), _dataSourceMap);
     });
 
     // Non literal lookup columnName argument
     Assert.assertThrows(BadQueryRequestException.class, () -> {
-      TransformFunctionFactory.get(RequestContextUtils.getExpressionFromSQL(
+      TransformFunctionFactory.get(RequestContextUtils.getExpression(
           String.format("lookup('baseballTeams','teamName',%s,%s)", STRING_SV_COLUMN, INT_SV_COLUMN)), _dataSourceMap);
     });
   }
@@ -165,7 +167,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     }};
 
     for (Map.Entry<String, FieldSpec.DataType> testCase : testCases.entrySet()) {
-      ExpressionContext expression = RequestContextUtils.getExpressionFromSQL(
+      ExpressionContext expression = RequestContextUtils.getExpression(
           String.format("lookup('baseballTeams','%s','teamID',%s)", testCase.getKey(), STRING_SV_COLUMN));
       TransformFunction transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
       Assert.assertEquals(transformFunction.getResultMetadata().getDataType(), testCase.getValue(),
@@ -174,12 +176,54 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
   }
 
   @Test
+  public void dimensionTableNotPopulated() throws Exception {
+    DimensionTableDataManager tableManager = mock(DimensionTableDataManager.class);
+    when(tableManager.isPopulated()).thenReturn(false);
+    when(tableManager.getPrimaryKeyColumns()).thenReturn(Arrays.asList("leagueID"));
+    when(tableManager.getColumnFieldSpec("leagueID"))
+        .thenReturn(new DimensionFieldSpec("leagueID", FieldSpec.DataType.STRING, true));
+    when(tableManager.getColumnFieldSpec("leagueName"))
+        .thenReturn(new DimensionFieldSpec("leagueName", FieldSpec.DataType.STRING, true));
+
+    DimensionTableDataManager.registerDimensionTable("baseballLeagues_OFFLINE", tableManager);
+
+    try {
+      ExpressionContext expression = RequestContextUtils
+          .getExpression(String.format("lookup('baseballLeagues','leagueName','leagueID',%s)",
+              STRING_SV_COLUMN));
+      TransformFunctionFactory.get(expression, _dataSourceMap);
+      fail("Should have thrown BadQueryRequestException");
+    } catch (Exception ex) {
+      Assert.assertEquals(ex.getCause().getMessage(), "Dimension table is not populated: baseballLeagues_OFFLINE");
+    }
+  }
+
+  @Test
+  public void dimensionTableIsPopulated() throws Exception {
+    DimensionTableDataManager tableManager = mock(DimensionTableDataManager.class);
+    when(tableManager.isPopulated()).thenReturn(true);
+    when(tableManager.getPrimaryKeyColumns()).thenReturn(Arrays.asList("playerID"));
+    when(tableManager.getColumnFieldSpec("playerID"))
+        .thenReturn(new DimensionFieldSpec("playerID", FieldSpec.DataType.STRING, true));
+    when(tableManager.getColumnFieldSpec("playerName"))
+        .thenReturn(new DimensionFieldSpec("playerName", FieldSpec.DataType.STRING, true));
+
+    DimensionTableDataManager.registerDimensionTable("baseballPlayers_OFFLINE", tableManager);
+
+      ExpressionContext expression = RequestContextUtils
+          .getExpression(String.format("lookup('baseballPlayers','playerName','playerID',%s)",
+              STRING_SV_COLUMN));
+      TransformFunctionFactory.get(expression, _dataSourceMap);
+  }
+
+
+  @Test
   public void basicLookupTests()
       throws Exception {
     // Lookup col: StringSV
     // PK: [String]
     ExpressionContext expression = RequestContextUtils
-        .getExpressionFromSQL(String.format("lookup('baseballTeams','teamName','teamID',%s)", STRING_SV_COLUMN));
+        .getExpression(String.format("lookup('baseballTeams','teamName','teamID',%s)", STRING_SV_COLUMN));
     TransformFunction transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     String[] expectedStringValues = new String[NUM_ROWS];
     for (int i = 0; i < NUM_ROWS; i++) {
@@ -190,7 +234,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     // Lookup col: IntSV
     // PK: [String]
     expression = RequestContextUtils
-        .getExpressionFromSQL(String.format("lookup('baseballTeams','teamInteger','teamID',%s)", STRING_SV_COLUMN));
+        .getExpression(String.format("lookup('baseballTeams','teamInteger','teamID',%s)", STRING_SV_COLUMN));
     transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     int[] expectedIntValues = new int[NUM_ROWS];
     for (int i = 0; i < NUM_ROWS; i++) {
@@ -201,7 +245,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     // Lookup col: DoubleSV
     // PK: [String]
     expression = RequestContextUtils
-        .getExpressionFromSQL(String.format("lookup('baseballTeams','teamDouble','teamID',%s)", STRING_SV_COLUMN));
+        .getExpression(String.format("lookup('baseballTeams','teamDouble','teamID',%s)", STRING_SV_COLUMN));
     transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     double[] expectedDoubleValues = new double[NUM_ROWS];
     for (int i = 0; i < NUM_ROWS; i++) {
@@ -212,7 +256,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     // Lookup col: BytesSV
     // PK: [String]
     expression = RequestContextUtils
-        .getExpressionFromSQL(String.format("lookup('baseballTeams','teamBytes','teamID',%s)", STRING_SV_COLUMN));
+        .getExpression(String.format("lookup('baseballTeams','teamBytes','teamID',%s)", STRING_SV_COLUMN));
     transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     byte[][] expectedBytesValues = new byte[NUM_ROWS][];
     for (int i = 0; i < NUM_ROWS; i++) {
@@ -227,7 +271,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     // Lookup col: StringMV
     // PK: [String]
     ExpressionContext expression = RequestContextUtils
-        .getExpressionFromSQL(String.format("lookup('baseballTeams','teamName_MV','teamID',%s)", STRING_SV_COLUMN));
+        .getExpression(String.format("lookup('baseballTeams','teamName_MV','teamID',%s)", STRING_SV_COLUMN));
     TransformFunction transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     String[][] expectedStringMVValues = new String[NUM_ROWS][];
     for (int i = 0; i < NUM_ROWS; i++) {
@@ -241,7 +285,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     // Lookup col: IntegerMV
     // PK: [String]
     expression = RequestContextUtils
-        .getExpressionFromSQL(String.format("lookup('baseballTeams','teamInteger_MV','teamID',%s)", STRING_SV_COLUMN));
+        .getExpression(String.format("lookup('baseballTeams','teamInteger_MV','teamID',%s)", STRING_SV_COLUMN));
     transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     int[][] expectedIntegerMVValues = new int[NUM_ROWS][0];
     for (int i = 0; i < NUM_ROWS; i++) {
@@ -255,7 +299,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     // Lookup col: FloatMV
     // PK: [String]
     expression = RequestContextUtils
-        .getExpressionFromSQL(String.format("lookup('baseballTeams','teamFloat_MV','teamID',%s)", STRING_SV_COLUMN));
+        .getExpression(String.format("lookup('baseballTeams','teamFloat_MV','teamID',%s)", STRING_SV_COLUMN));
     transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     float[][] expectedFloatMVValues = new float[NUM_ROWS][0];
     for (int i = 0; i < NUM_ROWS; i++) {
@@ -269,7 +313,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     // Lookup col: LongMV
     // PK: [String]
     expression = RequestContextUtils
-        .getExpressionFromSQL(String.format("lookup('baseballTeams','teamLong_MV','teamID',%s)", STRING_SV_COLUMN));
+        .getExpression(String.format("lookup('baseballTeams','teamLong_MV','teamID',%s)", STRING_SV_COLUMN));
     transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     long[][] expectedLongMVValues = new long[NUM_ROWS][0];
     for (int i = 0; i < NUM_ROWS; i++) {
@@ -283,7 +327,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     // Lookup col: DoubleMV
     // PK: [String]
     expression = RequestContextUtils
-        .getExpressionFromSQL(String.format("lookup('baseballTeams','teamDouble_MV','teamID',%s)", STRING_SV_COLUMN));
+        .getExpression(String.format("lookup('baseballTeams','teamDouble_MV','teamID',%s)", STRING_SV_COLUMN));
     transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     double[][] expectedDoubleMVValues = new double[NUM_ROWS][0];
     for (int i = 0; i < NUM_ROWS; i++) {
@@ -310,6 +354,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     for (Map.Entry<String, FieldSpec.DataType> table : testTables.entrySet()) {
       DimensionTableDataManager mgr = mock(DimensionTableDataManager.class);
       DimensionTableDataManager.registerDimensionTable(table.getKey(), mgr);
+      when(mgr.isPopulated()).thenReturn(true);
       when(mgr.getPrimaryKeyColumns()).thenReturn(Arrays.asList("primaryColumn"));
       when(mgr.getColumnFieldSpec("primaryColumn"))
           .thenReturn(new DimensionFieldSpec("primaryColumn", table.getValue(), true));
@@ -324,7 +369,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     }
 
     // PK: [Int]
-    ExpressionContext expression = RequestContextUtils.getExpressionFromSQL(
+    ExpressionContext expression = RequestContextUtils.getExpression(
         String.format("lookup('dimTableWithIntPK', 'lookupColumn', 'primaryColumn', %s)", INT_SV_COLUMN));
     TransformFunction transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     String[] expectedResults = new String[NUM_ROWS];
@@ -335,7 +380,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     testTransformFunction(transformFunction, expectedResults);
 
     // PK: [String]
-    expression = RequestContextUtils.getExpressionFromSQL(
+    expression = RequestContextUtils.getExpression(
         String.format("lookup('dimTableWithStringPK', 'lookupColumn', 'primaryColumn', %s)", STRING_SV_COLUMN));
     transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     expectedResults = new String[NUM_ROWS];
@@ -346,7 +391,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     testTransformFunction(transformFunction, expectedResults);
 
     // PK: [Long]
-    expression = RequestContextUtils.getExpressionFromSQL(
+    expression = RequestContextUtils.getExpression(
         String.format("lookup('dimTableWithLongPK', 'lookupColumn', 'primaryColumn', %s)", LONG_SV_COLUMN));
     transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     expectedResults = new String[NUM_ROWS];
@@ -357,7 +402,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     testTransformFunction(transformFunction, expectedResults);
 
     // PK: [Float]
-    expression = RequestContextUtils.getExpressionFromSQL(
+    expression = RequestContextUtils.getExpression(
         String.format("lookup('dimTableWithFloatPK', 'lookupColumn', 'primaryColumn', %s)", FLOAT_SV_COLUMN));
     transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     expectedResults = new String[NUM_ROWS];
@@ -368,7 +413,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     testTransformFunction(transformFunction, expectedResults);
 
     // PK: [Double]
-    expression = RequestContextUtils.getExpressionFromSQL(
+    expression = RequestContextUtils.getExpression(
         String.format("lookup('dimTableWithDoublePK', 'lookupColumn', 'primaryColumn', %s)", DOUBLE_SV_COLUMN));
     transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     expectedResults = new String[NUM_ROWS];
@@ -379,7 +424,7 @@ public class LookupTransformFunctionTest extends BaseTransformFunctionTest {
     testTransformFunction(transformFunction, expectedResults);
 
     // PK: [Byte[]]
-    expression = RequestContextUtils.getExpressionFromSQL(
+    expression = RequestContextUtils.getExpression(
         String.format("lookup('dimTableWithBytesPK', 'lookupColumn', 'primaryColumn', %s)", BYTES_SV_COLUMN));
     transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
     expectedResults = new String[NUM_ROWS];

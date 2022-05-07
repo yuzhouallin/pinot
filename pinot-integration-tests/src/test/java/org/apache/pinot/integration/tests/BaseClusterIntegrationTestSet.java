@@ -30,7 +30,7 @@ import org.apache.pinot.client.ResultSetGroup;
 import org.apache.pinot.common.exception.QueryException;
 import org.apache.pinot.core.query.utils.idset.IdSet;
 import org.apache.pinot.core.query.utils.idset.IdSets;
-import org.apache.pinot.server.starter.helix.HelixServerStarter;
+import org.apache.pinot.server.starter.helix.BaseServerStarter;
 import org.apache.pinot.spi.data.DimensionFieldSpec;
 import org.apache.pinot.spi.data.FieldSpec;
 import org.apache.pinot.spi.data.MetricFieldSpec;
@@ -76,12 +76,10 @@ public abstract class BaseClusterIntegrationTestSet extends BaseClusterIntegrati
   /**
    * Test server table data manager deletion after the table is dropped
    */
-  protected void cleanupTestTableDataManager(String tableNameWithType)
-      throws Exception {
-    List<HelixServerStarter> serverStarters = getServerStarters();
+  protected void cleanupTestTableDataManager(String tableNameWithType) {
     TestUtils.waitForCondition(aVoid -> {
       try {
-        for (HelixServerStarter serverStarter : serverStarters) {
+        for (BaseServerStarter serverStarter : _serverStarters) {
           if (serverStarter.getServerInstance().getInstanceDataManager().getTableDataManager(tableNameWithType)
               != null) {
             return false;
@@ -308,7 +306,7 @@ public abstract class BaseClusterIntegrationTestSet extends BaseClusterIntegrati
         // matching query
         "SELECT count(*) FROM mytable",
         // query that does not match any row
-        "SELECT count(*) FROM mytable where non_existing_column='non_existing_value",
+        "SELECT count(*) FROM mytable where non_existing_column='non_existing_value'",
         // query a non existing table
         "SELECT count(*) FROM mytable_foo"
     };
@@ -419,7 +417,7 @@ public abstract class BaseClusterIntegrationTestSet extends BaseClusterIntegrati
    */
   public void testQueryExceptions()
       throws Exception {
-    testQueryException("POTATO", QueryException.PQL_PARSING_ERROR_CODE);
+    testQueryException("POTATO", QueryException.SQL_PARSING_ERROR_CODE);
     testQueryException("SELECT COUNT(*) FROM potato", QueryException.TABLE_DOES_NOT_EXIST_ERROR_CODE);
     testQueryException("SELECT POTATO(ArrTime) FROM mytable", QueryException.QUERY_EXECUTION_ERROR_CODE);
     testQueryException("SELECT COUNT(*) FROM mytable where ArrTime = 'potato'",

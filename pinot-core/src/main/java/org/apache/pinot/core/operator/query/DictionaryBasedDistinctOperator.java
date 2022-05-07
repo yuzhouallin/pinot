@@ -41,7 +41,6 @@ import org.apache.pinot.spi.data.FieldSpec;
  * Operator which executes DISTINCT operation based on dictionary
  */
 public class DictionaryBasedDistinctOperator extends BaseOperator<IntermediateResultsBlock> {
-  private static final String OPERATOR_NAME = "DictionaryBasedDistinctOperator";
   private static final String EXPLAIN_NAME = "DISTINCT_DICTIONARY";
 
   private final DistinctAggregationFunction _distinctAggregationFunction;
@@ -73,10 +72,8 @@ public class DictionaryBasedDistinctOperator extends BaseOperator<IntermediateRe
 
   @Override
   protected IntermediateResultsBlock getNextBlock() {
-    DistinctTable distinctTable = buildResult();
-
     return new IntermediateResultsBlock(new AggregationFunction[]{_distinctAggregationFunction},
-        Collections.singletonList(distinctTable), false);
+        Collections.singletonList(buildResult()));
   }
 
   /**
@@ -135,11 +132,6 @@ public class DictionaryBasedDistinctOperator extends BaseOperator<IntermediateRe
     }
 
     return new DistinctTable(dataSchema, records);
-  }
-
-  @Override
-  public String getOperatorName() {
-    return OPERATOR_NAME;
   }
 
   @Override

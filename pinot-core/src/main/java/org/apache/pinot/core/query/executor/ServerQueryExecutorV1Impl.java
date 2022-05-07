@@ -66,6 +66,7 @@ import org.apache.pinot.segment.spi.MutableSegment;
 import org.apache.pinot.segment.spi.SegmentMetadata;
 import org.apache.pinot.spi.env.PinotConfiguration;
 import org.apache.pinot.spi.exception.BadQueryRequestException;
+import org.apache.pinot.spi.trace.Tracing;
 import org.apache.pinot.spi.utils.CommonConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -118,6 +119,19 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
   @Override
   public DataTable processQuery(ServerQueryRequest queryRequest, ExecutorService executorService,
       @Nullable StreamObserver<Server.ServerResponse> responseObserver) {
+    if (!queryRequest.isEnableTrace()) {
+      return processQueryInternal(queryRequest, executorService, responseObserver);
+    }
+    try {
+      Tracing.getTracer().register(queryRequest.getRequestId());
+      return processQueryInternal(queryRequest, executorService, responseObserver);
+    } finally {
+      Tracing.getTracer().unregister();
+    }
+  }
+
+  private DataTable processQueryInternal(ServerQueryRequest queryRequest, ExecutorService executorService,
+      @Nullable StreamObserver<Server.ServerResponse> responseObserver) {
     TimerContext timerContext = queryRequest.getTimerContext();
     TimerContext.Timer schedulerWaitTimer = timerContext.getPhaseTimer(ServerQueryPhase.SCHEDULER_WAIT);
     if (schedulerWaitTimer != null) {
@@ -146,9 +160,9 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
     long querySchedulingTimeMs = System.currentTimeMillis() - queryArrivalTimeMs;
     if (querySchedulingTimeMs >= queryTimeoutMs) {
       _serverMetrics.addMeteredTableValue(tableNameWithType, ServerMeter.SCHEDULING_TIMEOUT_EXCEPTIONS, 1);
-      String errorMessage = String
-          .format("Query scheduling took %dms (longer than query timeout of %dms) on server: %s", querySchedulingTimeMs,
-              queryTimeoutMs, _instanceDataManager.getInstanceId());
+      String errorMessage =
+          String.format("Query scheduling took %dms (longer than query timeout of %dms) on server: %s",
+              querySchedulingTimeMs, queryTimeoutMs, _instanceDataManager.getInstanceId());
       DataTable dataTable = DataTableBuilder.getEmptyDataTable();
       dataTable.addException(QueryException.getException(QueryException.QUERY_SCHEDULING_TIMEOUT_ERROR, errorMessage));
       LOGGER.error("{} while processing requestId: {}", errorMessage, requestId);
@@ -157,8 +171,8 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
 
     TableDataManager tableDataManager = _instanceDataManager.getTableDataManager(tableNameWithType);
     if (tableDataManager == null) {
-      String errorMessage = String
-          .format("Failed to find table: %s on server: %s", tableNameWithType, _instanceDataManager.getInstanceId());
+      String errorMessage = String.format("Failed to find table: %s on server: %s", tableNameWithType,
+          _instanceDataManager.getInstanceId());
       DataTable dataTable = DataTableBuilder.getEmptyDataTable();
       dataTable.addException(QueryException.getException(QueryException.SERVER_TABLE_MISSING_ERROR, errorMessage));
       LOGGER.error("{} while processing requestId: {}", errorMessage, requestId);
@@ -193,15 +207,10 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
       }
     }
 
-    boolean enableTrace = queryRequest.isEnableTrace();
-    if (enableTrace) {
-      TraceContext.register(requestId);
-    }
-
     DataTable dataTable = null;
     try {
       dataTable = processQuery(indexSegments, queryContext, timerContext, executorService, responseObserver,
-          queryRequest.isEnableStreaming(), queryRequest.isExplain());
+          queryRequest.isEnableStreaming());
     } catch (Exception e) {
       _serverMetrics.addMeteredTableValue(tableNameWithType, ServerMeter.QUERY_EXECUTION_EXCEPTIONS, 1);
 
@@ -218,11 +227,10 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
       for (SegmentDataManager segmentDataManager : segmentDataManagers) {
         tableDataManager.releaseSegment(segmentDataManager);
       }
-      if (enableTrace) {
-        if (dataTable != null) {
+      if (queryRequest.isEnableTrace()) {
+        if (TraceContext.traceEnabled() && dataTable != null) {
           dataTable.getMetadata().put(MetadataKey.TRACE_INFO.getName(), TraceContext.getTraceInfo());
         }
-        TraceContext.unregister();
       }
     }
 
@@ -263,7 +271,7 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
 
   private DataTable processQuery(List<IndexSegment> indexSegments, QueryContext queryContext, TimerContext timerContext,
       ExecutorService executorService, @Nullable StreamObserver<Server.ServerResponse> responseObserver,
-      boolean enableStreaming, boolean isExplain)
+      boolean enableStreaming)
       throws Exception {
     handleSubquery(queryContext, indexSegments, timerContext, executorService);
 
@@ -280,7 +288,7 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
     LOGGER.debug("Matched {} segments after pruning", numSelectedSegments);
     if (numSelectedSegments == 0) {
       // Only return metadata for streaming query
-      if (isExplain) {
+      if (queryContext.isExplain()) {
         return EXPLAIN_PLAN_RESULTS_NO_MATCHING_SEGMENT;
       }
 
@@ -301,7 +309,7 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
       planBuildTimer.stopAndRecord();
 
       TimerContext.Timer planExecTimer = timerContext.startNewPhaseTimer(ServerQueryPhase.QUERY_PLAN_EXECUTION);
-      DataTable dataTable = isExplain ? processExplainPlanQueries(queryPlan) : queryPlan.execute();
+      DataTable dataTable = queryContext.isExplain() ? processExplainPlanQueries(queryPlan) : queryPlan.execute();
       planExecTimer.stopAndRecord();
 
       // Update the total docs in the metadata based on the un-pruned segments
@@ -341,8 +349,8 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
   }
 
   /** Create EXPLAIN query result {@link DataTable} by recursively stepping through the {@link Operator} tree. */
-  public static void addOperatorToTable(DataTableBuilder dataTableBuilder, Operator node, int[] globalId,
-      int parentId) throws IOException {
+  public static void addOperatorToTable(DataTableBuilder dataTableBuilder, Operator node, int[] globalId, int parentId)
+      throws IOException {
     if (node == null) {
       return;
     }
@@ -415,7 +423,7 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
       ExpressionContext subqueryExpression = arguments.get(1);
       Preconditions.checkState(subqueryExpression.getType() == ExpressionContext.Type.LITERAL,
           "Second argument of IN_PARTITIONED_SUBQUERY must be a literal (subquery)");
-      QueryContext subquery = QueryContextConverterUtils.getQueryContextFromSQL(subqueryExpression.getLiteral());
+      QueryContext subquery = QueryContextConverterUtils.getQueryContext(subqueryExpression.getLiteral());
       // Subquery should be an ID_SET aggregation only query
       //noinspection rawtypes
       AggregationFunction[] aggregationFunctions = subquery.getAggregationFunctions();
@@ -426,8 +434,7 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
           subqueryExpression.getLiteral());
       // Execute the subquery
       subquery.setEndTimeMs(endTimeMs);
-      DataTable dataTable = processQuery(indexSegments, subquery, timerContext, executorService, null,
-          false, false);
+      DataTable dataTable = processQuery(indexSegments, subquery, timerContext, executorService, null, false);
       IdSet idSet = dataTable.getObject(0, 0);
       String serializedIdSet = idSet.toBase64String();
       // Rewrite the expression

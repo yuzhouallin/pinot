@@ -22,6 +22,7 @@ import com.google.common.primitives.Ints;
 import com.google.common.primitives.Longs;
 import java.io.DataInputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -35,7 +36,6 @@ import org.apache.pinot.core.query.aggregation.function.DistinctAggregationFunct
 import org.apache.pinot.core.query.distinct.DistinctTable;
 import org.apache.pinot.core.query.request.context.QueryContext;
 import org.apache.pinot.core.query.request.context.utils.QueryContextUtils;
-import org.apache.pinot.core.util.QueryOptionsUtils;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -136,43 +136,23 @@ public class DataTableUtils {
     if (groupByExpressions != null) {
       // Aggregation group-by query
 
-      if (QueryOptionsUtils.isGroupByModeSQL(queryContext.getQueryOptions())) {
-        // SQL format
-
-        int numColumns = groupByExpressions.size() + numAggregations;
-        String[] columnNames = new String[numColumns];
-        ColumnDataType[] columnDataTypes = new ColumnDataType[numColumns];
-        int index = 0;
-        for (ExpressionContext groupByExpression : groupByExpressions) {
-          columnNames[index] = groupByExpression.toString();
-          // Use STRING column data type as default for group-by expressions
-          columnDataTypes[index] = ColumnDataType.STRING;
-          index++;
-        }
-        for (AggregationFunction aggregationFunction : aggregationFunctions) {
-          // NOTE: Use AggregationFunction.getResultColumnName() for SQL format response
-          columnNames[index] = aggregationFunction.getResultColumnName();
-          columnDataTypes[index] = aggregationFunction.getIntermediateResultColumnType();
-          index++;
-        }
-        return new DataTableBuilder(new DataSchema(columnNames, columnDataTypes)).build();
-      } else {
-        // PQL format
-
-        String[] columnNames = new String[]{"functionName", "GroupByResultMap"};
-        ColumnDataType[] columnDataTypes = new ColumnDataType[]{ColumnDataType.STRING, ColumnDataType.OBJECT};
-
-        // Build the data table
-        DataTableBuilder dataTableBuilder = new DataTableBuilder(new DataSchema(columnNames, columnDataTypes));
-        for (AggregationFunction aggregationFunction : aggregationFunctions) {
-          dataTableBuilder.startRow();
-          // NOTE: For backward-compatibility, use AggregationFunction.getColumnName() for PQL format response
-          dataTableBuilder.setColumn(0, aggregationFunction.getColumnName());
-          dataTableBuilder.setColumn(1, Collections.emptyMap());
-          dataTableBuilder.finishRow();
-        }
-        return dataTableBuilder.build();
+      int numColumns = groupByExpressions.size() + numAggregations;
+      String[] columnNames = new String[numColumns];
+      ColumnDataType[] columnDataTypes = new ColumnDataType[numColumns];
+      int index = 0;
+      for (ExpressionContext groupByExpression : groupByExpressions) {
+        columnNames[index] = groupByExpression.toString();
+        // Use STRING column data type as default for group-by expressions
+        columnDataTypes[index] = ColumnDataType.STRING;
+        index++;
       }
+      for (AggregationFunction aggregationFunction : aggregationFunctions) {
+        // NOTE: Use AggregationFunction.getResultColumnName() for SQL format response
+        columnNames[index] = aggregationFunction.getResultColumnName();
+        columnDataTypes[index] = aggregationFunction.getIntermediateResultColumnType();
+        index++;
+      }
+      return new DataTableBuilder(new DataSchema(columnNames, columnDataTypes)).build();
     } else {
       // Aggregation only query
 
@@ -254,6 +234,21 @@ public class DataTableUtils {
       int numBytesRead = dataInputStream.read(buffer);
       assert numBytesRead == length;
       return new String(buffer, UTF_8);
+    }
+  }
+
+  /**
+   * Helper method to decode string.
+   */
+  public static String decodeString(ByteBuffer buffer)
+      throws IOException {
+    int length = buffer.getInt();
+    if (length == 0) {
+      return "";
+    } else {
+      byte[] bytes = new byte[length];
+      buffer.get(bytes);
+      return new String(bytes, UTF_8);
     }
   }
 

@@ -18,6 +18,7 @@
  */
 package org.apache.pinot.core.operator.query;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -69,7 +70,7 @@ import org.roaringbitmap.RoaringBitmap;
  * </ul>
  */
 public class SelectionOrderByOperator extends BaseOperator<IntermediateResultsBlock> {
-  private static final String OPERATOR_NAME = "SelectionOrderByOperator";
+
   private static final String EXPLAIN_NAME = "SELECT_ORDERBY";
 
   private final IndexSegment _indexSegment;
@@ -160,6 +161,9 @@ public class SelectionOrderByOperator extends BaseOperator<IntermediateResultsBl
             break;
           case DOUBLE:
             result = ((Double) v1).compareTo((Double) v2);
+            break;
+          case BIG_DECIMAL:
+            result = ((BigDecimal) v1).compareTo((BigDecimal) v2);
             break;
           case STRING:
             result = ((String) v1).compareTo((String) v2);
@@ -365,10 +369,6 @@ public class SelectionOrderByOperator extends BaseOperator<IntermediateResultsBl
     return new IntermediateResultsBlock(dataSchema, _rows);
   }
 
-  @Override
-  public String getOperatorName() {
-    return OPERATOR_NAME;
-  }
 
   @Override
   public List<Operator> getChildOperators() {

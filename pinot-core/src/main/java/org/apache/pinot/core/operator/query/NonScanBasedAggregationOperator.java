@@ -61,15 +61,15 @@ import org.apache.pinot.spi.utils.ByteArray;
  */
 @SuppressWarnings("rawtypes")
 public class NonScanBasedAggregationOperator extends BaseOperator<IntermediateResultsBlock> {
-  private static final String OPERATOR_NAME = NonScanBasedAggregationOperator.class.getSimpleName();
+
   private static final String EXPLAIN_NAME = "AGGREGATE_NO_SCAN";
 
   private final AggregationFunction[] _aggregationFunctions;
   private final DataSource[] _dataSources;
   private final int _numTotalDocs;
 
-  public NonScanBasedAggregationOperator(AggregationFunction[] aggregationFunctions,
-      DataSource[] dataSources, int numTotalDocs) {
+  public NonScanBasedAggregationOperator(AggregationFunction[] aggregationFunctions, DataSource[] dataSources,
+      int numTotalDocs) {
     _aggregationFunctions = aggregationFunctions;
     _dataSources = dataSources;
     _numTotalDocs = numTotalDocs;
@@ -128,7 +128,7 @@ public class NonScanBasedAggregationOperator extends BaseOperator<IntermediateRe
     }
 
     // Build intermediate result block based on aggregation result from the executor.
-    return new IntermediateResultsBlock(_aggregationFunctions, aggregationResults, false);
+    return new IntermediateResultsBlock(_aggregationFunctions, aggregationResults);
   }
 
   private static Double getMinValue(DataSource dataSource) {
@@ -231,17 +231,12 @@ public class NonScanBasedAggregationOperator extends BaseOperator<IntermediateRe
 
   private static Object getDistinctCountSmartHLLResult(Dictionary dictionary,
       DistinctCountSmartHLLAggregationFunction function) {
-    if (dictionary.length() > function.getHllConversionThreshold()) {
+    if (dictionary.length() > function.getThreshold()) {
       // Store values into a HLL when the dictionary size exceeds the conversion threshold
-      return getDistinctValueHLL(dictionary, function.getHllLog2m());
+      return getDistinctValueHLL(dictionary, function.getLog2m());
     } else {
       return getDistinctValueSet(dictionary);
     }
-  }
-
-  @Override
-  public String getOperatorName() {
-    return OPERATOR_NAME;
   }
 
   @Override

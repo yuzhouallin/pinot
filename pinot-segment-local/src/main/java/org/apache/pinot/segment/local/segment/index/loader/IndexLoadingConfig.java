@@ -19,6 +19,7 @@
 package org.apache.pinot.segment.local.segment.index.loader;
 
 import com.google.common.annotations.VisibleForTesting;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -29,6 +30,8 @@ import javax.annotation.Nullable;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pinot.segment.local.segment.index.column.PhysicalColumnIndexContainer;
 import org.apache.pinot.segment.local.segment.index.loader.columnminmaxvalue.ColumnMinMaxValueGeneratorMode;
+import org.apache.pinot.segment.local.segment.store.TextIndexUtils;
+import org.apache.pinot.segment.spi.creator.SegmentGeneratorConfig;
 import org.apache.pinot.segment.spi.creator.SegmentVersion;
 import org.apache.pinot.segment.spi.index.creator.H3IndexConfig;
 import org.apache.pinot.segment.spi.loader.SegmentDirectoryLoaderRegistry;
@@ -39,6 +42,9 @@ import org.apache.pinot.spi.config.table.FieldConfig;
 import org.apache.pinot.spi.config.table.IndexingConfig;
 import org.apache.pinot.spi.config.table.StarTreeIndexConfig;
 import org.apache.pinot.spi.config.table.TableConfig;
+import org.apache.pinot.spi.config.table.TimestampIndexGranularity;
+import org.apache.pinot.spi.config.table.ingestion.IngestionConfig;
+import org.apache.pinot.spi.config.table.ingestion.TransformConfig;
 import org.apache.pinot.spi.env.PinotConfiguration;
 import org.apache.pinot.spi.utils.CommonConstants;
 import org.apache.pinot.spi.utils.ReadMode;
@@ -151,6 +157,33 @@ public class IndexLoadingConfig {
     extractFSTIndexColumnsFromTableConfig(tableConfig);
     extractH3IndexConfigsFromTableConfig(tableConfig);
 
+    Map<String, List<TimestampIndexGranularity>> timestampIndexConfigs =
+        SegmentGeneratorConfig.extractTimestampIndexConfigsFromTableConfig(tableConfig);
+    if (!timestampIndexConfigs.isEmpty()) {
+      // Apply transform function and range index to the timestamp with granularity columns
+      IngestionConfig ingestionConfig = tableConfig.getIngestionConfig();
+      if (ingestionConfig == null) {
+        ingestionConfig = new IngestionConfig();
+        tableConfig.setIngestionConfig(ingestionConfig);
+      }
+      List<TransformConfig> transformConfigs = ingestionConfig.getTransformConfigs();
+      if (transformConfigs == null) {
+        transformConfigs = new ArrayList<>();
+        ingestionConfig.setTransformConfigs(transformConfigs);
+      }
+      for (Map.Entry<String, List<TimestampIndexGranularity>> entry : timestampIndexConfigs.entrySet()) {
+        String column = entry.getKey();
+        for (TimestampIndexGranularity granularity : entry.getValue()) {
+          String columnNameWithGranularity =
+              TimestampIndexGranularity.getColumnNameWithGranularity(column, granularity);
+          TransformConfig transformConfig = new TransformConfig(columnNameWithGranularity,
+              TimestampIndexGranularity.getTransformExpression(column, granularity));
+          transformConfigs.add(transformConfig);
+          _rangeIndexColumns.add(columnNameWithGranularity);
+        }
+      }
+    }
+
     Map<String, String> noDictionaryConfig = indexingConfig.getNoDictionaryConfig();
     if (noDictionaryConfig != null) {
       _noDictionaryConfig.putAll(noDictionaryConfig);
@@ -197,6 +230,10 @@ public class IndexLoadingConfig {
         String column = fieldConfig.getName();
         if (fieldConfig.getIndexType() == FieldConfig.IndexType.TEXT) {
           _textIndexColumns.add(column);
+          Map<String, String> propertiesMap = fieldConfig.getProperties();
+          if (TextIndexUtils.isFstTypeNative(propertiesMap)) {
+            _fstIndexType = FSTType.NATIVE;
+          }
         }
       }
     }
